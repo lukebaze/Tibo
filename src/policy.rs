@@ -1,0 +1,353 @@
+use crate::{jev::{Answer, Answers}, questions::{Thresholds, Turn}};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Agent {
+    Omp,
+    ClaudeCode,
+    Codex,
+}
+
+impl Agent {
+    pub fn as_str(self) -> &'static str {
+        match self { Self::Omp => "omp", Self::ClaudeCode => "claude_code", Self::Codex => "codex" }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClosedIntent {
+    #[serde(rename = "omp.list_agents")]
+    OmpListAgents,
+    #[serde(rename = "claude.review_change")]
+    ClaudeReviewChange,
+    #[serde(rename = "codex.run_benchmark")]
+    CodexRunBenchmark,
+    #[serde(rename = "eva.run_evaluation")]
+    EvaRunEvaluation,
+    #[serde(rename = "omp.delete_all_sessions")]
+    OmpDeleteAllSessions,
+}
+
+impl ClosedIntent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OmpListAgents => "omp.list_agents",
+            Self::ClaudeReviewChange => "claude.review_change",
+            Self::CodexRunBenchmark => "codex.run_benchmark",
+            Self::EvaRunEvaluation => "eva.run_evaluation",
+            Self::OmpDeleteAllSessions => "omp.delete_all_sessions",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "omp.list_agents" => Self::OmpListAgents,
+            "claude.review_change" => Self::ClaudeReviewChange,
+            "codex.run_benchmark" => Self::CodexRunBenchmark,
+            "eva.run_evaluation" => Self::EvaRunEvaluation,
+            "omp.delete_all_sessions" => Self::OmpDeleteAllSessions,
+            _ => return None,
+        })
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::OmpListAgents => "liệt kê agent OMP",
+            Self::ClaudeReviewChange => "review thay đổi hiện tại",
+            Self::CodexRunBenchmark => "chạy benchmark",
+            Self::EvaRunEvaluation => "chạy đánh giá Eva",
+            Self::OmpDeleteAllSessions => "xoá toàn bộ phiên OMP",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionAction {
+    Stop,
+    Pause,
+    Continue,
+    Correct { text: String },
+    Append { text: String },
+    Status,
+    Confirm,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingAction {
+    Closed { intent: ClosedIntent },
+    Coding { agent: Agent, prompt: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Decision {
+    Ignore { reason: &'static str },
+    Incomplete,
+    Clarify { say: String },
+    Session(SessionAction),
+    Closed { intent: ClosedIntent },
+    Coding { agent: Agent, prompt: String },
+    ComputerUse,
+    Chat,
+    NeedConfirm { pending: PendingAction, say: String },
+}
+
+pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decision {
+    let has_context = turn.session.active || turn.interrupted || turn.session.pending_confirmation.is_some();
+    if !turn.wake_matched && !has_context {
+        return Decision::Ignore { reason: "no_wake" };
+    }
+    if !turn.wake_matched && noul(answers, "addressed_to_graviz") < thresholds.addressed_min {
+        return Decision::Ignore { reason: "not_addressed" };
+    }
+
+    if turn.session.pending_confirmation.is_some() {
+        return match choice(answers, "session_action") {
+            Some(("confirm", confidence)) if confidence >= thresholds.action_conf_min => Decision::Session(SessionAction::Confirm),
+            Some(("cancel", confidence)) if confidence >= thresholds.action_conf_min => Decision::Session(SessionAction::Cancel),
+            _ => Decision::Clarify { say: "Bạn xác nhận hay huỷ lệnh đang chờ?".into() },
+        };
+    }
+
+    let short_control = matches!(normalize(&turn.transcript).as_str(), "dung" | "tiep tuc" | "khoan" | "khoan da");
+    if noul(answers, "semantic_complete") < thresholds.complete_min && !short_control {
+        return Decision::Incomplete;
+    }
+
+    let Some((route, route_confidence)) = choice(answers, "route") else {
+        return unclear();
+    };
+    if route_confidence < thresholds.route_conf_min || route == "unclear" {
+        return unclear();
+    }
+
+    match route {
+        "session_control" => {
+            if !turn.session.active {
+                return Decision::Clarify { say: "Hiện không có tác vụ nào đang chạy.".into() };
+            }
+            match choice(answers, "session_action") {
+                Some((action, confidence)) if confidence >= thresholds.action_conf_min => match action {
+                    "stop" => Decision::Session(SessionAction::Stop),
+                    "pause" => Decision::Session(SessionAction::Pause),
+                    "continue" => Decision::Session(SessionAction::Continue),
+                    "correct" => Decision::Session(SessionAction::Correct { text: turn.transcript.clone() }),
+                    "append" => Decision::Session(SessionAction::Append { text: turn.transcript.clone() }),
+                    "status" => Decision::Session(SessionAction::Status),
+                    "confirm" => Decision::Session(SessionAction::Confirm),
+                    "cancel" => Decision::Session(SessionAction::Cancel),
+                    _ => unclear(),
+                },
+                _ => unclear(),
+            }
+        }
+        "closed_command" => {
+            let Some((name, confidence)) = choice(answers, "closed_command") else { return unclear() };
+            let Some(intent) = ClosedIntent::parse(name) else { return unclear() };
+            if confidence < thresholds.closed_conf_min {
+                return unclear();
+            }
+            if intent == ClosedIntent::OmpDeleteAllSessions || score(answers, "risk") >= thresholds.risk_confirm_min {
+                return confirmation(PendingAction::Closed { intent }, intent.description());
+            }
+            Decision::Closed { intent }
+        }
+        "coding_task" => {
+            let agent = match choice(answers, "requested_agent") {
+                Some(("claude_code", confidence)) if confidence >= thresholds.agent_conf_min => Agent::ClaudeCode,
+                Some(("codex", confidence)) if confidence >= thresholds.agent_conf_min => Agent::Codex,
+                Some(("omp", confidence)) if confidence >= thresholds.agent_conf_min => Agent::Omp,
+                _ => Agent::Omp,
+            };
+            let pending = PendingAction::Coding { agent, prompt: turn.transcript.clone() };
+            if score(answers, "risk") >= thresholds.risk_confirm_min {
+                confirmation(pending, "thực hiện tác vụ có rủi ro cao")
+            } else {
+                Decision::Coding { agent, prompt: turn.transcript.clone() }
+            }
+        }
+        "computer_use" => Decision::ComputerUse,
+        "conversation" => Decision::Chat,
+        _ => unclear(),
+    }
+}
+
+pub fn decide_fallback(turn: &Turn) -> Decision {
+    let text = normalize(&turn.transcript);
+    let has_context = turn.session.active || turn.interrupted || turn.session.pending_confirmation.is_some();
+    if !turn.wake_matched && !has_context {
+        return Decision::Ignore { reason: "no_wake" };
+    }
+    if turn.session.pending_confirmation.is_some() {
+        if contains_any(&text, &["xac nhan", "dong y", "confirm"]) {
+            return Decision::Session(SessionAction::Confirm);
+        }
+        if contains_any(&text, &["huy", "cancel", "khong"]) {
+            return Decision::Session(SessionAction::Cancel);
+        }
+        return Decision::Clarify { say: "Bạn xác nhận hay huỷ lệnh đang chờ?".into() };
+    }
+    if turn.session.active {
+        if contains_any(&text, &["dung", "khoan", "stop"]) { return Decision::Session(SessionAction::Stop) }
+        if contains_any(&text, &["tiep tuc", "resume"]) { return Decision::Session(SessionAction::Continue) }
+        if contains_any(&text, &["den dau", "trang thai", "status"]) { return Decision::Session(SessionAction::Status) }
+    }
+    let intent = if contains_any(&text, &["session", "phien", "lich su", "history", "delete", "remove", "purge", "erase", "clear", "xoa", "huy", "don"]) {
+        Some(ClosedIntent::OmpDeleteAllSessions)
+    } else if contains_any(&text, &["claude", "review", "xem lai", "duyet", "check", "audit"]) {
+        Some(ClosedIntent::ClaudeReviewChange)
+    } else if contains_any(&text, &["codex", "benchmark", "bench", "hieu nang"]) {
+        Some(ClosedIntent::CodexRunBenchmark)
+    } else if contains_any(&text, &["eva", "danh gia"]) {
+        Some(ClosedIntent::EvaRunEvaluation)
+    } else if contains_any(&text, &["omp", "agent", "agents", "tac tu", "liet ke", "danh sach", "trang thai", "dang chay"]) {
+        Some(ClosedIntent::OmpListAgents)
+    } else {
+        None
+    };
+    match intent {
+        Some(ClosedIntent::OmpDeleteAllSessions) => confirmation(PendingAction::Closed { intent: ClosedIntent::OmpDeleteAllSessions }, "xoá toàn bộ phiên OMP"),
+        Some(intent) => Decision::Closed { intent },
+        None => Decision::Clarify { say: "Dịch vụ phân loại không phản hồi; tôi chỉ nhận lệnh cố định lúc này.".into() },
+    }
+}
+
+fn confirmation(pending: PendingAction, description: &str) -> Decision {
+    Decision::NeedConfirm { pending, say: format!("Cần phê duyệt: {description}. Nói 'xác nhận' hoặc 'huỷ'.") }
+}
+
+fn unclear() -> Decision {
+    Decision::Clarify { say: "Tôi chưa nghe rõ, bạn nói lại được không?".into() }
+}
+
+fn choice<'a>(answers: &'a Answers, id: &str) -> Option<(&'a str, f64)> {
+    match answers.get(id)? {
+        Answer::Choice { choice, confidence, .. } => Some((choice, *confidence)),
+        _ => None,
+    }
+}
+
+fn noul(answers: &Answers, id: &str) -> f64 {
+    match answers.get(id) { Some(Answer::Noul { noul }) => *noul, _ => 0.0 }
+}
+
+fn score(answers: &Answers, id: &str) -> f64 {
+    match answers.get(id) { Some(Answer::Score { score, .. }) => *score, _ => 0.0 }
+}
+
+fn contains_any(text: &str, words: &[&str]) -> bool {
+    words.iter().any(|word| text.contains(word))
+}
+
+pub fn normalize(input: &str) -> String {
+    input.to_lowercase().chars().map(|c| match c {
+        'à'|'á'|'ạ'|'ả'|'ã'|'â'|'ầ'|'ấ'|'ậ'|'ẩ'|'ẫ'|'ă'|'ằ'|'ắ'|'ặ'|'ẳ'|'ẵ' => 'a',
+        'è'|'é'|'ẹ'|'ẻ'|'ẽ'|'ê'|'ề'|'ế'|'ệ'|'ể'|'ễ' => 'e',
+        'ì'|'í'|'ị'|'ỉ'|'ĩ' => 'i',
+        'ò'|'ó'|'ọ'|'ỏ'|'õ'|'ô'|'ồ'|'ố'|'ộ'|'ổ'|'ỗ'|'ơ'|'ờ'|'ớ'|'ợ'|'ở'|'ỡ' => 'o',
+        'ù'|'ú'|'ụ'|'ủ'|'ũ'|'ư'|'ừ'|'ứ'|'ự'|'ử'|'ữ' => 'u',
+        'ỳ'|'ý'|'ỵ'|'ỷ'|'ỹ' => 'y',
+        'đ' => 'd',
+        _ => c,
+    }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::questions::SessionSnapshot;
+    use std::collections::HashMap;
+
+    fn turn(text: &str) -> Turn {
+        Turn { transcript: text.into(), wake_matched: true, asr_language: "vi".into(), interrupted: false, session: SessionSnapshot::default() }
+    }
+
+    fn answers(route: &str) -> Answers {
+        let mut a = HashMap::new();
+        a.insert("addressed_to_graviz".into(), Answer::Noul { noul: 1.0 });
+        a.insert("semantic_complete".into(), Answer::Noul { noul: 1.0 });
+        a.insert("route".into(), Answer::Choice { choice: route.into(), probabilities: HashMap::new(), confidence: 0.99 });
+        a.insert("session_action".into(), Answer::Choice { choice: "none".into(), probabilities: HashMap::new(), confidence: 0.99 });
+        a.insert("closed_command".into(), Answer::Choice { choice: "none".into(), probabilities: HashMap::new(), confidence: 0.99 });
+        a.insert("requested_agent".into(), Answer::Choice { choice: "unspecified".into(), probabilities: HashMap::new(), confidence: 0.99 });
+        a.insert("risk".into(), Answer::Score { score: 0.0, probabilities: HashMap::new(), confidence: 0.99 });
+        a
+    }
+
+    #[test]
+    fn no_wake_is_ignored() {
+        let mut value = turn("hello"); value.wake_matched = false;
+        assert!(matches!(decide(&value, &answers("conversation"), &Thresholds::default()), Decision::Ignore { reason: "no_wake" }));
+    }
+
+    #[test]
+    fn pending_confirmation_accepts_confirm() {
+        let mut value = turn("xác nhận"); value.wake_matched = false; value.session.pending_confirmation = Some("delete".into());
+        let mut a = answers("session_control"); set_choice(&mut a, "session_action", "confirm");
+        assert!(matches!(decide(&value, &a, &Thresholds::default()), Decision::Session(SessionAction::Confirm)));
+    }
+
+    #[test]
+    fn incomplete_utterance_listens_again() {
+        let mut a = answers("coding_task"); a.insert("semantic_complete".into(), Answer::Noul { noul: 0.0 });
+        assert!(matches!(decide(&turn("nhờ codex"), &a, &Thresholds::default()), Decision::Incomplete));
+    }
+
+    #[test]
+    fn unclear_route_clarifies() {
+        assert!(matches!(decide(&turn("gì đó"), &answers("unclear"), &Thresholds::default()), Decision::Clarify { .. }));
+    }
+
+    #[test]
+    fn stop_controls_active_session() {
+        let mut value = turn("dừng"); value.session.active = true;
+        let mut a = answers("session_control"); set_choice(&mut a, "session_action", "stop");
+        assert!(matches!(decide(&value, &a, &Thresholds::default()), Decision::Session(SessionAction::Stop)));
+    }
+
+    #[test]
+    fn stop_without_session_clarifies() {
+        let mut a = answers("session_control"); set_choice(&mut a, "session_action", "stop");
+        assert!(matches!(decide(&turn("dừng"), &a, &Thresholds::default()), Decision::Clarify { .. }));
+    }
+
+    #[test]
+    fn session_deletion_requires_confirmation() {
+        let mut a = answers("closed_command"); set_choice(&mut a, "closed_command", "omp.delete_all_sessions");
+        assert!(matches!(decide(&turn("xoá hết session"), &a, &Thresholds::default()), Decision::NeedConfirm { .. }));
+    }
+
+    #[test]
+    fn coding_honors_requested_codex() {
+        let mut a = answers("coding_task"); set_choice(&mut a, "requested_agent", "codex");
+        assert!(matches!(decide(&turn("codex sửa lỗi"), &a, &Thresholds::default()), Decision::Coding { agent: Agent::Codex, .. }));
+    }
+
+    #[test]
+    fn risky_coding_requires_confirmation() {
+        let mut a = answers("coding_task");
+        a.insert("risk".into(), Answer::Score { score: 2.0, probabilities: HashMap::new(), confidence: 0.9 });
+        assert!(matches!(decide(&turn("drop database"), &a, &Thresholds::default()), Decision::NeedConfirm { .. }));
+    }
+
+    #[test]
+    fn computer_use_is_not_executed() {
+        assert_eq!(decide(&turn("mở Safari"), &answers("computer_use"), &Thresholds::default()), Decision::ComputerUse);
+    }
+
+    #[test]
+    fn conversation_returns_chat() {
+        assert_eq!(decide(&turn("chào bạn"), &answers("conversation"), &Thresholds::default()), Decision::Chat);
+    }
+
+    #[test]
+    fn fallback_deletion_still_requires_confirmation() {
+        assert!(matches!(decide_fallback(&turn("xoá hết session")), Decision::NeedConfirm { .. }));
+    }
+
+    fn set_choice(answers: &mut Answers, id: &str, value: &str) {
+        answers.insert(id.into(), Answer::Choice { choice: value.into(), probabilities: HashMap::new(), confidence: 0.9 });
+    }
+}

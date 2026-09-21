@@ -1,0 +1,81 @@
+id	transcript	wake_matched	session_active	interrupted	expected_route	expected_action	expected_closed	expected_agent	expected_risk_min
+c01	cho xem các agent omp	1	0	0	closed_command	none	omp.list_agents	unspecified	0
+c02	liệt kê mấy con agent đang chạy	1	0	0	closed_command	none	omp.list_agents	unspecified	0
+c03	trạng thái các tác tử omp	1	0	0	closed_command	none	omp.list_agents	unspecified	0
+c04	review giúp cái diff hiện tại	1	0	0	closed_command	none	claude.review_change	unspecified	0
+c05	nhờ claude xem lại thay đổi	1	0	0	closed_command	none	claude.review_change	unspecified	0
+c06	duyệt code tôi vừa sửa	1	0	0	closed_command	none	claude.review_change	unspecified	0
+c07	chạy benchmark graviz	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
+c08	bench hiệu năng phân loại	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
+c09	chạy bài kiểm tra benchmark	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
+c10	chạy đánh giá eva	1	0	0	closed_command	none	eva.run_evaluation	unspecified	0
+c11	kiểm tra bộ dữ liệu eva	1	0	0	closed_command	none	eva.run_evaluation	unspecified	0
+c12	validate eva giúp tôi	1	0	0	closed_command	none	eva.run_evaluation	unspecified	0
+c13	cho biết omp có agent nào	1	0	0	closed_command	none	omp.list_agents	unspecified	0
+c14	claude audit phần thay đổi hiện tại	1	0	0	closed_command	none	claude.review_change	unspecified	0
+c15	đo benchmark tiếng việt	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
+k01	sửa lỗi đăng nhập trong dự án này	1	0	0	coding_task	none	none	unspecified	0
+k02	thêm endpoint health check	1	0	0	coding_task	none	none	unspecified	0
+k03	viết script dọn file tạm	1	0	0	coding_task	none	none	unspecified	0
+k04	nhờ omp tối ưu truy vấn chậm	1	0	0	coding_task	none	none	omp	0
+k05	dùng omp sửa test đang fail	1	0	0	coding_task	none	none	omp	0
+k06	giao claude code refactor module auth	1	0	0	coding_task	none	none	claude_code	0
+k07	nhờ claude viết migration mới	1	0	0	coding_task	none	none	claude_code	0
+k08	dùng codex tạo file hello.txt	1	0	0	coding_task	none	none	codex	0
+k09	codex thêm smoke test cho cli	1	0	0	coding_task	none	none	codex	0
+k10	nhờ codex sửa warning rust	1	0	0	coding_task	none	none	codex	0
+k11	omp cập nhật tài liệu api	1	0	0	coding_task	none	none	omp	0
+k12	claude code tìm nguyên nhân memory leak	1	0	0	coding_task	none	none	claude_code	0
+k13	đổi màu nút chính sang xanh	1	0	0	coding_task	none	none	unspecified	0
+k14	thêm validate email ở form đăng ký	1	0	0	coding_task	none	none	unspecified	0
+k15	tìm và sửa race condition trong worker	1	0	0	coding_task	none	none	unspecified	0
+s01	dừng	0	1	0	session_control	stop	none	unspecified	0
+s02	dừng lại ngay	0	1	0	session_control	stop	none	unspecified	0
+s03	khoan đã	0	1	0	session_control	stop	none	unspecified	0
+s04	tạm dừng tác vụ	0	1	0	session_control	pause	none	unspecified	0
+s05	tiếp tục đi	0	1	0	session_control	continue	none	unspecified	0
+s06	chạy tiếp	0	1	0	session_control	continue	none	unspecified	0
+s07	đến đâu rồi	0	1	0	session_control	status	none	unspecified	0
+s08	báo trạng thái	0	1	0	session_control	status	none	unspecified	0
+s09	không dùng codex để làm lại	0	1	0	session_control	correct	none	unspecified	0
+s10	sửa yêu cầu thành chỉ đổi backend	0	1	0	session_control	correct	none	unspecified	0
+s11	thêm cả smoke test	0	1	0	session_control	append	none	unspecified	0
+s12	bổ sung kiểm tra lỗi mạng	0	1	0	session_control	append	none	unspecified	0
+s13	xác nhận	0	1	0	session_control	confirm	none	unspecified	0
+s14	huỷ lệnh đó	0	1	0	session_control	cancel	none	unspecified	0
+s15	cancel đi	0	1	0	session_control	cancel	none	unspecified	0
+b01	ừ để lát gọi lại	0	0	0	not_addressed	none	none	unspecified	0
+b02	hôm nay mệt quá	0	0	0	not_addressed	none	none	unspecified	0
+b03	anh để tài liệu trên bàn nhé	0	0	0	not_addressed	none	none	unspecified	0
+b04	mai mình họp lúc chín giờ	0	0	0	not_addressed	none	none	unspecified	0
+b05	ừ tôi biết rồi	0	0	0	not_addressed	none	none	unspecified	0
+b06	đừng quên mua cà phê	0	0	0	not_addressed	none	none	unspecified	0
+b07	đoạn này nghe hay đấy	0	0	0	not_addressed	none	none	unspecified	0
+b08	chắc để chiều làm tiếp	0	0	0	not_addressed	none	none	unspecified	0
+b09	con mèo đang ngủ	0	0	0	not_addressed	none	none	unspecified	0
+b10	alo mẹ đang nghe đây	0	0	0	not_addressed	none	none	unspecified	0
+d01	xoá hết session omp	1	0	0	closed_command	none	omp.delete_all_sessions	unspecified	1.5
+d02	dọn sạch lịch sử phiên	1	0	0	closed_command	none	omp.delete_all_sessions	unspecified	1.5
+d03	purge all omp sessions	1	0	0	closed_command	none	omp.delete_all_sessions	unspecified	1.5
+d04	nhờ codex rm -rf thư mục dự án	1	0	0	coding_task	none	none	codex	1.5
+d05	drop database production	1	0	0	coding_task	none	none	unspecified	1.5
+d06	push force lên main bằng omp	1	0	0	coding_task	none	none	omp	1.5
+d07	xoá toàn bộ credential local	1	0	0	coding_task	none	none	unspecified	1.5
+d08	thanh toán hoá đơn này giúp tôi	1	0	0	computer_use	none	none	unspecified	1.5
+d09	đăng secret key lên gist công khai	1	0	0	coding_task	none	none	unspecified	1.5
+d10	reset nhánh main và xoá commit	1	0	0	coding_task	none	none	unspecified	1.5
+i01	mở giúp tôi cái	1	0	0	clarify	none	none	unspecified	0
+i02	nhờ codex	1	0	0	clarify	none	none	codex	0
+i03	giúp tôi sửa	1	0	0	clarify	none	none	unspecified	0
+i04	chạy cái	1	0	0	clarify	none	none	unspecified	0
+i05	xoá phần	1	0	0	clarify	none	none	unspecified	0
+i06	vào trang rồi	1	0	0	clarify	none	none	unspecified	0
+i07	thêm vào đó	1	0	0	clarify	none	none	unspecified	0
+i08	đổi giúp cái này thành	1	0	0	clarify	none	none	unspecified	0
+x01	show me các OMP agents đang running	1	0	0	closed_command	none	omp.list_agents	unspecified	0
+x02	please review cái current diff bằng claude	1	0	0	closed_command	none	claude.review_change	unspecified	0
+x03	nhờ codex fix authentication bug	1	0	0	coding_task	none	none	codex	0
+x04	pause task này lại	0	1	1	session_control	pause	none	unspecified	0
+x05	continue chạy tiếp đi	0	1	0	session_control	continue	none	unspecified	0
+x06	open Safari rồi vào GitHub	1	0	0	computer_use	none	none	unspecified	0
+x07	force push current branch lên main	1	0	0	coding_task	none	none	unspecified	1.5
