@@ -23,13 +23,14 @@ pub fn transcribe(wav: &Path, model: Option<&Path>, language: Option<&str>, prom
     let whisper = env::var("GRAVIZ_WHISPER_CLI").unwrap_or_else(|_| "/opt/homebrew/bin/whisper-cli".into());
     let model = model.map(Path::to_path_buf)
         .or_else(|| env::var_os("GRAVIZ_WHISPER_MODEL").map(PathBuf::from))
-        .unwrap_or_else(|| home().join(".local/share/graviz/models/ggml-base.bin"));
+        .unwrap_or_else(|| home().join(".local/share/graviz/models/ggml-small.bin"));
     let language = language.map(str::to_owned).or_else(|| env::var("GRAVIZ_WHISPER_LANGUAGE").ok()).unwrap_or_else(|| "vi".into());
-    let prompt = prompt.map(str::to_owned).or_else(|| env::var("GRAVIZ_WHISPER_PROMPT").ok());
+    let prompt = prompt.map(str::to_owned).or_else(|| env::var("GRAVIZ_WHISPER_PROMPT").ok()).unwrap_or_else(|| "Graviz. Trợ lý giọng nói tiếng Việt. OMP, Claude Code, Codex, Eva. Lệnh: dừng, tiếp tục, xác nhận, huỷ, liệt kê agent, review thay đổi, chạy benchmark.".into());
     println!("STAGE whisper_start_ms={}", elapsed_ms());
     let mut command = Command::new(whisper);
-    command.args(["-np", "-nt", "-l", &language, "-m"]).arg(model);
-    if let Some(prompt) = prompt { command.args(["--prompt", &prompt]); }
+    command.args(["-np", "-nt", "-l", &language, "-m"]).arg(&model);
+    command.args(["--prompt", &prompt, "--carry-initial-prompt"]);
+    eprintln!("GRAVIZ_STT model={} language={language}", model.file_name().and_then(|name| name.to_str()).unwrap_or("custom"));
     let output = command.arg("-f").arg(wav).output().map_err(|e| e.to_string())?;
     println!("STAGE whisper_done_ms={}", elapsed_ms());
     if !output.status.success() {

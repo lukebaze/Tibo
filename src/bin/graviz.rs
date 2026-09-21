@@ -124,7 +124,7 @@ fn doctor() -> Result<(), String> {
     ] {
         if !PathBuf::from(path).is_file() { failures.push(name.to_string()); }
     }
-    let model = env::var("GRAVIZ_WHISPER_MODEL").map(PathBuf::from).unwrap_or_else(|_| home().join(".local/share/graviz/models/ggml-base.bin"));
+    let model = env::var("GRAVIZ_WHISPER_MODEL").map(PathBuf::from).unwrap_or_else(|_| home().join(".local/share/graviz/models/ggml-small.bin"));
     if !model.is_file() { failures.push("whisper model".into()); }
     let model_dir = env::var("GRAVIZ_TTS_MODEL_DIR").map(PathBuf::from).unwrap_or_else(|_| home().join(".local/share/graviz/models/kokoro-vi"));
     for file in ["config.json", "kokoro_vi.onnx", "voices.json"] {

@@ -45,6 +45,9 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var converter: AVAudioConverter?
     private var targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: false)!
     private var writer: WavWriter?
+    private var preRoll: [AVAudioPCMBuffer] = []
+    private var preRollFrames: AVAudioFrameCount = 0
+    private var noiseFloor: Float = -50
     private var onsetDuration = 0.0
     private var silenceDuration = 0.0
     private var recordingDuration = 0.0
@@ -56,6 +59,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var player: AVAudioPlayer?
     private var playbackStarted = Date.distantPast
     private var backendRunning = false
+    private let vadMargin = Float(ProcessInfo.processInfo.environment["GRAVIZ_VAD_MARGIN_DB"] ?? "8") ?? 8
 
     override init() {
         super.init()
@@ -134,14 +138,26 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         let db = rms(buffer)
         power = db
         let now = Date()
-        if now.timeIntervalSince(lastMeterLog) >= 0.05 {
-            print(String(format: "GRAVIZ_MIC meter power=%.1f", db))
-            lastMeterLog = now
-        }
         let speaking = player?.isPlaying == true
         if speaking && now.timeIntervalSince(playbackStarted) < 0.25 { return }
-        let threshold: Float = speaking ? -29 : -35
+        let threshold: Float = speaking ? max(-32, noiseFloor + 12) : min(-25, max(-48, noiseFloor + vadMargin))
+        if now.timeIntervalSince(lastMeterLog) >= 0.05 {
+            print(String(format: "GRAVIZ_MIC meter power=%.1f threshold=%.1f noise=%.1f", db, threshold, noiseFloor))
+            lastMeterLog = now
+        }
         let duration = Double(buffer.frameLength) / buffer.format.sampleRate
+        guard let converted = convert(buffer) else { return }
+        if writer == nil {
+            preRoll.append(converted)
+            preRollFrames += converted.frameLength
+            let limit = AVAudioFrameCount(targetFormat.sampleRate * 0.45)
+            while preRollFrames > limit, preRoll.count > 1 {
+                preRollFrames -= preRoll.removeFirst().frameLength
+            }
+            if !speaking && db < threshold {
+                noiseFloor = (noiseFloor * 0.98) + (db * 0.02)
+            }
+        }
         if db > threshold {
             onsetDuration += duration
             silenceDuration = 0
@@ -150,7 +166,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             onsetDuration = 0
             if writer != nil { silenceDuration += duration }
         }
-        if writer == nil && onsetDuration >= 0.15 {
+        var startedNow = false
+        if writer == nil && onsetDuration >= 0.10 {
             if speaking {
                 player?.stop()
                 player = nil
@@ -158,21 +175,28 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 print("GRAVIZ_MIC barge_in")
             }
             do {
-                writer = try WavWriter()
-                recordingDuration = 0
+                let newWriter = try WavWriter()
+                for buffered in preRoll { try newWriter.write(buffered) }
+                writer = newWriter
+                recordingDuration = Double(preRollFrames) / targetFormat.sampleRate
+                preRoll.removeAll(keepingCapacity: true)
+                preRollFrames = 0
                 state = .listening
+                startedNow = true
+                print(String(format: "GRAVIZ_MIC speech_started threshold=%.1f noise=%.1f preroll_ms=450", threshold, noiseFloor))
             } catch {
                 summary = "Không thể ghi âm: \(error.localizedDescription)"
                 return
             }
         }
-        if let writer, let converted = convert(buffer) {
-            try? writer.write(converted)
-            recordingDuration += duration
-            let silenceLimit = awaitingMore ? 4.0 : 0.7
+        if let writer {
+            if !startedNow { try? writer.write(converted); recordingDuration += duration }
+            let silenceLimit = awaitingMore ? 1.2 : 0.65
             if silenceDuration >= silenceLimit || recordingDuration >= 15 {
                 self.writer = nil
                 let url = writer.url
+                onsetDuration = 0
+                silenceDuration = 0
                 submit(url)
             }
         }
