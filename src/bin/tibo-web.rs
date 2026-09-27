@@ -33,7 +33,7 @@ fn system_prompt() -> String {
     } else {
         format!(" Người dùng tên là {}.", profile.user_name.trim())
     };
-    format!("Bạn là {name}, trợ lý giọng nói trên macOS.{user} Trả lời bằng tiếng Việt tự nhiên, không Markdown, tối đa ba câu trừ khi người dùng yêu cầu chi tiết. Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng.")
+    format!("Bạn là {name}, trợ lý giọng nói trên macOS.{user} Câu trả lời sẽ được đọc thành tiếng, nên hãy nói như đang trò chuyện: thật ngắn gọn, thường một câu, tối đa hai câu, đi thẳng vào ý chính. Dùng tiếng Việt tự nhiên, thân thiện; không Markdown, không gạch đầu dòng, không emoji, không rào đón, không nhắc lại câu hỏi. Kể cả khi được hỏi \"giải thích\" hay \"là gì\", chỉ nêu ý cốt lõi trong một hai câu; chỉ nói dài khi người dùng nói rõ muốn nghe chi tiết. Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng.")
 }
 
 #[derive(Deserialize)]
