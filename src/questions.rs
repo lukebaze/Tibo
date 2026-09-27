@@ -28,7 +28,7 @@ pub struct Turn {
 
 pub fn build_state(turn: &Turn) -> Value {
     let assistant_name = crate::profile::load().assistant_name;
-    json!({
+    let mut state = json!({
         "transcript": turn.transcript,
         "asr": {
             "language": turn.asr_language,
@@ -36,8 +36,7 @@ pub fn build_state(turn: &Turn) -> Value {
         },
         "assistant": {
             "name": assistant_name,
-            "was_speaking_when_user_spoke": turn.interrupted,
-            "in_conversation_with_user": turn.conversation
+            "was_speaking_when_user_spoke": turn.interrupted
         },
         "session": {
             "active": turn.session.active,
@@ -47,7 +46,11 @@ pub fn build_state(turn: &Turn) -> Value {
             "pending_confirmation": turn.session.pending_confirmation
         },
         "recent_conversation": turn.recent
-    })
+    });
+    if turn.conversation {
+        state["assistant"]["in_conversation_with_user"] = json!(true);
+    }
+    state
 }
 
 pub fn questions() -> Value {
@@ -55,7 +58,7 @@ pub fn questions() -> Value {
     json!({
         "addressed_to_tibo": {
             "type": "noul",
-            "instructions": format!("The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant {name}. Session context, an interruption, or an ongoing conversation (assistant.in_conversation_with_user, see recent_conversation) can make an utterance addressed even without the wake word; in a conversation, a follow-up question or request is addressed, but talk to other people or media audio is not."),
+            "instructions": format!("The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant {name}. When session.active is true, a short command controlling, correcting, or extending the running task (dừng, khoan đã, tiếp tục, chạy tiếp, đến đâu rồi, xác nhận, huỷ, thêm cả smoke test, sửa yêu cầu thành...) is addressed even without the wake word. Session context, an interruption, or an ongoing conversation (assistant.in_conversation_with_user, see recent_conversation) can make an utterance addressed even without the wake word; in a conversation, a follow-up question or request is addressed, but talk to other people or media audio is not."),
             "criteria": {
                 "true": format!("The user is speaking to {name} or controlling the active {name} task."),
                 "false": "Background speech, another person, dictation, or self-talk not directed at the assistant."
@@ -133,7 +136,7 @@ pub fn questions() -> Value {
         },
         "risk": {
             "type": "score",
-            "instructions": "Score the highest plausible consequence, not just the grammatical tone. Always choose level 2 for sending or submitting content, changing settings or files, purchases or payments, credentials or secrets, deletion, production changes, or any irreversible action.",
+            "instructions": "Score the highest plausible consequence, not just the grammatical tone. Always choose level 2 for sending or submitting content, changing settings or files, purchases or payments, credentials or secrets, deletion, production changes, pushing to a shared remote or main branch, force push or rewriting git history, or any irreversible action.",
             "criteria": [
                 "Read-only or informational",
                 "Reversible local state change with no external submission",
