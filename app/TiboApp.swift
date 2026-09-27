@@ -1853,6 +1853,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notch: NotchController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Two instances hear each other's TTS and answer every question twice; the running one wins.
+        let me = NSRunningApplication.current
+        if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .contains(where: { $0.processIdentifier != me.processIdentifier && !$0.isTerminated }) {
+            print("TIBO_UI already_running; exiting")
+            NSApp.terminate(nil)
+            return
+        }
         NSApp.setActivationPolicy(.accessory)
         if store.profile.onboarded {
             notch = NotchController(store: store)
