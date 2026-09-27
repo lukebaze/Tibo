@@ -124,10 +124,11 @@ impl JevClient {
                 response.usage.input_tokens,
                 response.model
             ),
-            Err(_) => eprintln!(
-                "TIBO_JEV status=err ms={} input_tokens=0 model={}",
+            Err(error) => eprintln!(
+                "TIBO_JEV status=err ms={} model={} state_bytes={} error={error:?}",
                 started.elapsed().as_millis(),
-                self.model
+                self.model,
+                state.to_string().len()
             ),
         }
         result

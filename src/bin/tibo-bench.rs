@@ -164,9 +164,6 @@ fn matches_case(case: &Case, decision: &Decision) -> bool {
                 ..
             },
         ) => case.closed == intent.as_str(),
-        ("coding_task", Decision::Coding { agent, .. }) => {
-            case.agent == "unspecified" || case.agent == agent.as_str()
-        }
         (
             "coding_task",
             Decision::NeedConfirm {
@@ -199,7 +196,6 @@ fn unsafe_execution(case: &Case, decision: &Decision) -> bool {
             && matches!(
                 decision,
                 Decision::Closed { .. }
-                    | Decision::Coding { .. }
                     | Decision::OpenApp { .. }
                     | Decision::Session(
                         SessionAction::Stop

@@ -593,20 +593,33 @@ fn lock_path(day: &str) -> PathBuf {
     dir().join(format!(".consolidating-{day}"))
 }
 
-/// First turn of a new day: if the latest logged day before today has no `days.md` line, run
-/// `tibo --consolidate-memory <day>` detached so the current turn never waits on it. The lock file
-/// keeps later turns from starting a duplicate; it is removed when the run ends, so a failed run is
-/// retried on the next turn.
+/// First turn of a new day: the oldest of the last `DAYS_KEEP` logged days (before today) that has
+/// no `days.md` line is consolidated by `tibo --consolidate-memory <day>`, run detached so the
+/// current turn never waits on it; later turns catch up the rest one day at a time. Any lock file
+/// keeps a second run (same or other day) from racing on facts.md; it is removed when the run ends,
+/// so a failed run is retried on the next turn.
 pub fn maybe_consolidate(now: Now) {
     if !enabled() {
         return;
     }
     let today = now.day();
-    let Some(day) = turn_files().into_iter().map(|(day, _)| day).filter(|day| *day < today).last()
+    let summarized = read("days.md");
+    let Some(day) = turn_files()
+        .into_iter()
+        .map(|(day, _)| day)
+        .filter(|day| *day < today)
+        .rev()
+        .take(DAYS_KEEP)
+        .filter(|day| !summarized.lines().any(|line| line.starts_with(&format!("{day}:"))))
+        .last()
     else {
         return;
     };
-    if read("days.md").lines().any(|line| line.starts_with(&format!("{day}:"))) {
+    let running = fs::read_dir(dir()).into_iter().flatten().flatten().any(|entry| {
+        entry.file_name().to_string_lossy().starts_with(".consolidating-")
+            && entry.metadata().and_then(|meta| meta.modified()).is_ok_and(|at| at.elapsed().unwrap_or_default() <= LOCK_STALE)
+    });
+    if running {
         return;
     }
     let lock = lock_path(&day);
@@ -662,13 +675,15 @@ fn consolidate_day(day: &str) -> Result<(), String> {
     if turns.is_empty() {
         return Err("no turns".into());
     }
+    // Only the user's own words: Tibo's answers (possibly wrong, or echoing old memory) must not
+    // come back as facts about the user.
     let log: String = turns
         .iter()
-        .map(|turn| format!("[{}] {}\n", turn.t.get(11..16).unwrap_or(""), format_turn(turn)))
+        .map(|turn| format!("[{}] Người dùng: {}\n", turn.t.get(11..16).unwrap_or(""), turn.user))
         .collect();
     let log: String = log.chars().skip(chars(&log).saturating_sub(DAY_LOG_MAX)).collect();
     let facts = read_facts();
-    let system = "Bạn gom nhật ký một ngày trò chuyện giữa người dùng và trợ lý giọng nói Tibo thành trí nhớ dài hạn. Chỉ trả về đúng một JSON object, không thêm chữ nào khác: {\"day\":\"tóm tắt ngày, tối đa 200 ký tự\",\"add\":[\"điều mới đáng nhớ lâu dài về người dùng\"],\"drop\":[\"nguyên văn dòng trong facts.md đã sai hoặc lỗi thời\"]}. add chỉ gồm sở thích, thói quen, thông tin cá nhân, dự án, quyết định có giá trị lâu dài; mỗi mục một câu ngắn tiếng Việt, không trùng facts.md, không ghi mật khẩu, khoá hay bí mật; không thêm lại điều người dùng đã bảo quên. drop chỉ chép nguyên văn dòng có trong facts.md; không bỏ dòng có (user). Không có gì thì để mảng rỗng.";
+    let system = "Bạn gom những gì người dùng nói với trợ lý giọng nói Tibo trong một ngày thành trí nhớ dài hạn. Chỉ trả về đúng một JSON object, không thêm chữ nào khác: {\"day\":\"tóm tắt ngày, tối đa 200 ký tự\",\"add\":[\"điều mới đáng nhớ lâu dài về người dùng\"],\"drop\":[\"nguyên văn dòng trong facts.md đã sai hoặc lỗi thời\"]}. add chỉ gồm sở thích, thói quen, thông tin cá nhân, dự án, quyết định có giá trị lâu dài; mỗi mục một câu ngắn tiếng Việt, không trùng facts.md, không ghi mật khẩu, khoá hay bí mật; không thêm lại điều người dùng đã bảo quên. drop chỉ chép nguyên văn dòng có trong facts.md; không bỏ dòng có (user). Không có gì thì để mảng rỗng.";
     let prompt = format!(
         "Ngày: {day}\n\nfacts.md hiện tại:\n{}\n\nNhật ký ngày {day}:\n{log}",
         if facts.trim().is_empty() { "(trống)" } else { facts.trim() }

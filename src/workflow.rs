@@ -4,6 +4,7 @@
 //! ```text
 //! # Name
 //! triggers: phrase | phrase | ...
+//! confirm: yes            (optional: acts on the Mac/web, so it waits for "xác nhận")
 //! ---
 //! instructions for the agent ({mac} = the bundled macOS helper)
 //! ```
@@ -33,6 +34,8 @@ pub struct Workflow {
     pub name: String,
     pub triggers: Vec<String>,
     pub body: String,
+    /// Acting workflow: needs the user's approval before it runs.
+    pub confirm: bool,
 }
 
 pub fn dir() -> PathBuf {
@@ -61,11 +64,14 @@ pub fn parse(id: &str, text: &str) -> Option<Workflow> {
     let (head, body) = text.split_once("\n---\n")?;
     let mut name = None;
     let mut triggers = Vec::new();
+    let mut confirm = false;
     for line in head.lines() {
         if let Some(title) = line.strip_prefix("# ") {
             name = Some(title.trim().to_string());
         } else if let Some(list) = line.strip_prefix("triggers:") {
             triggers = list.split('|').map(normalize).filter(|t| !t.is_empty()).collect();
+        } else if let Some(value) = line.strip_prefix("confirm:") {
+            confirm = matches!(value.trim(), "yes" | "true" | "có");
         }
     }
     (!triggers.is_empty()).then(|| Workflow {
@@ -73,6 +79,7 @@ pub fn parse(id: &str, text: &str) -> Option<Workflow> {
         name: name.unwrap_or_else(|| id.into()),
         triggers,
         body: body.trim().into(),
+        confirm,
     })
 }
 
@@ -93,8 +100,10 @@ pub fn load() -> Vec<Workflow> {
 
 /// The workflow whose trigger appears earliest in `transcript` (whole words), longest on a tie:
 /// the request usually leads, so "hẹn giờ 5 phút nhắc tôi uống nước" is a timer, not a reminder.
+/// Punctuation counts as a word break ("trên youtube." still matches "trên youtube").
 pub fn find<'a>(workflows: &'a [Workflow], transcript: &str) -> Option<&'a Workflow> {
-    let text = format!(" {} ", normalize(transcript));
+    let words: String = normalize(transcript).chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+    let text = format!(" {} ", words.split_whitespace().collect::<Vec<_>>().join(" "));
     let text = text.as_str();
     workflows
         .iter()
@@ -148,9 +157,16 @@ mod tests {
             ("dịch đoạn tôi vừa copy sang tiếng Anh", "clipboard"),
             ("tìm trên youtube bài Lạc Trôi", "trinh-duyet"),
             ("mở trang vnexpress xem tin mới", "trinh-duyet"),
+            ("Bật nhạc Sơn Tùng trên Youtube.", "trinh-duyet"),
         ] {
             assert_eq!(find(&all, said).map(|w| w.id.as_str()), Some(id), "{said}");
         }
+    }
+
+    #[test]
+    fn only_the_browser_workflow_needs_approval() {
+        let acting: Vec<String> = defaults().into_iter().filter(|w| w.confirm).map(|w| w.id).collect();
+        assert_eq!(acting, ["trinh-duyet"]);
     }
 
     #[test]

@@ -85,10 +85,13 @@ pub enum SessionAction {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PendingAction {
     Closed { intent: ClosedIntent },
-    Coding { agent: Agent, prompt: String },
+    /// `restart`: replaces the running task (a correction/addition) instead of refusing while busy.
+    Coding { agent: Agent, prompt: String, #[serde(default)] restart: bool },
     ComputerUse { prompt: String },
     /// `line: None` forgets the whole memory.
     ForgetMemory { line: Option<String> },
+    /// An acting workflow (e.g. browser automation) waiting for approval; `prompt` is the request.
+    Workflow { id: String, prompt: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +109,6 @@ pub enum Decision {
     Clarify { say: String },
     Session(SessionAction),
     Closed { intent: ClosedIntent },
-    Coding { agent: Agent, prompt: String },
     OpenApp { name: String },
     /// Read-only question about the current screen; `vision` attaches the screenshot, otherwise OCR text only.
     ReadScreen { vision: bool },
@@ -220,17 +222,17 @@ pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decisi
                 Some(("omp", confidence)) if confidence >= thresholds.agent_conf_min => Agent::Omp,
                 _ => Agent::Omp,
             };
+            // Coding agents run with write/approve-for-me permissions, so a voice task always
+            // waits for approval; `risk` only picks the wording.
             let pending = PendingAction::Coding {
                 agent,
                 prompt: turn.transcript.clone(),
+                restart: false,
             };
             if score(answers, "risk") >= thresholds.risk_confirm_min {
                 confirmation(pending, "thực hiện tác vụ có rủi ro cao")
             } else {
-                Decision::Coding {
-                    agent,
-                    prompt: turn.transcript.clone(),
-                }
+                confirmation(pending, &format!("giao cho {}: {}", agent.as_str(), turn.transcript))
             }
         }
         "computer_use" => {
@@ -269,6 +271,9 @@ pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decisi
     }
 }
 
+/// Keyword routing used only when Jev is unreachable. It has none of Jev's confidence gates, so it
+/// never approves a pending action on a partial match and never starts anything with side effects:
+/// those turns get a clarifying question until Jev is back.
 pub fn decide_fallback(turn: &Turn) -> Decision {
     let text = normalize(&turn.transcript);
     let has_context =
@@ -277,11 +282,19 @@ pub fn decide_fallback(turn: &Turn) -> Decision {
         return Decision::Ignore { reason: "no_wake" };
     }
     if turn.session.pending_confirmation.is_some() {
-        if contains_any(&text, &["xac nhan", "dong y", "confirm"]) {
-            return Decision::Session(SessionAction::Confirm);
-        }
-        if contains_any(&text, &["huy", "cancel", "khong"]) {
+        // Negation first: "không đồng ý" contains "đồng ý". Approval needs the bare phrase.
+        let words: String = text
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if contains_any(&format!(" {words} "), &[" huy ", " cancel ", " khong ", " dung ", " thoi "]) {
             return Decision::Session(SessionAction::Cancel);
+        }
+        if matches!(words.as_str(), "xac nhan" | "dong y" | "confirm" | "tibo xac nhan" | "tibo dong y") {
+            return Decision::Session(SessionAction::Confirm);
         }
         return Decision::Clarify {
             say: "Bạn xác nhận hay huỷ lệnh đang chờ?".into(),
@@ -312,50 +325,19 @@ pub fn decide_fallback(turn: &Turn) -> Decision {
             vision: needs_vision(&turn.transcript),
         };
     }
-    let intent = if contains_any(
-        &text,
-        &[
-            "session", "phien", "lich su", "history", "delete", "remove", "purge", "erase",
-            "clear", "xoa", "huy", "don",
-        ],
-    ) {
-        Some(ClosedIntent::OmpDeleteAllSessions)
-    } else if contains_any(
-        &text,
-        &["claude", "review", "xem lai", "duyet", "check", "audit"],
-    ) {
-        Some(ClosedIntent::ClaudeReviewChange)
-    } else if contains_any(&text, &["codex", "benchmark", "bench", "hieu nang"]) {
-        Some(ClosedIntent::CodexRunBenchmark)
-    } else if contains_any(&text, &["eva", "danh gia"]) {
-        Some(ClosedIntent::EvaRunEvaluation)
-    } else if contains_any(
-        &text,
-        &[
-            "omp",
-            "agent",
-            "agents",
-            "tac tu",
-            "liet ke",
-            "danh sach",
-            "trang thai",
-            "dang chay",
-        ],
-    ) {
-        Some(ClosedIntent::OmpListAgents)
-    } else {
-        None
-    };
-    match intent {
-        Some(ClosedIntent::OmpDeleteAllSessions) => confirmation(
-            PendingAction::Closed {
-                intent: ClosedIntent::OmpDeleteAllSessions,
-            },
-            "xoá toàn bộ phiên OMP",
-        ),
-        Some(intent) => Decision::Closed { intent },
-        None => Decision::Chat,
+    if contains_any(&text, &["omp", "agent", "tac tu", "liet ke", "danh sach", "dang chay"]) {
+        return Decision::Closed { intent: ClosedIntent::OmpListAgents };
     }
+    let side_effect = [
+        "session", "phien", "lich su", "history", "delete", "remove", "purge", "erase", "clear", "xoa",
+        "claude", "review", "codex", "benchmark", "bench", "eva", "danh gia",
+    ];
+    if contains_any(&text, &side_effect) {
+        return Decision::Clarify {
+            say: "Mình đang mất kết nối bộ định tuyến, chưa chạy lệnh này được. Bạn thử lại sau nhé.".into(),
+        };
+    }
+    Decision::Chat
 }
 
 /// ponytail: keyword split between OCR (fast, on-device text) and a screenshot for a vision model;
@@ -746,8 +728,8 @@ mod tests {
         set_choice(&mut a, "requested_agent", "codex");
         assert!(matches!(
             decide(&turn("codex sửa lỗi"), &a, &Thresholds::default()),
-            Decision::Coding {
-                agent: Agent::Codex,
+            Decision::NeedConfirm {
+                pending: PendingAction::Coding { agent: Agent::Codex, .. },
                 ..
             }
         ));
@@ -876,11 +858,17 @@ mod tests {
     }
 
     #[test]
-    fn fallback_deletion_still_requires_confirmation() {
-        assert!(matches!(
-            decide_fallback(&turn("xoá hết session")),
-            Decision::NeedConfirm { .. }
-        ));
+    fn fallback_never_runs_or_approves_side_effects() {
+        assert!(matches!(decide_fallback(&turn("xoá hết session")), Decision::Clarify { .. }));
+        assert!(matches!(decide_fallback(&turn("chạy đánh giá eva")), Decision::Clarify { .. }));
+        let mut pending = turn("không đồng ý");
+        pending.wake_matched = false;
+        pending.session.pending_confirmation = Some("computer_use: mở safari".into());
+        assert_eq!(decide_fallback(&pending), Decision::Session(SessionAction::Cancel));
+        pending.transcript = "đồng ý à, để tôi nghĩ".into();
+        assert!(matches!(decide_fallback(&pending), Decision::Clarify { .. }));
+        pending.transcript = "Đồng ý.".into();
+        assert_eq!(decide_fallback(&pending), Decision::Session(SessionAction::Confirm));
     }
 
     #[test]

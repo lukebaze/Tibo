@@ -241,13 +241,19 @@ impl SentenceBuffer {
             }
         }
         if final_delta {
-            let remainder = self.text.trim().to_string();
+            chunks.push(self.text.trim().to_string());
             self.text.clear();
-            if !remainder.is_empty() {
-                chunks.push(remainder);
-            }
         }
+        // Models ignore "no Markdown" now and then; "**", "---" or a code fence has no phonemes and
+        // made Kokoro fail the whole turn. Speak the words, drop chunks with nothing to say.
         chunks
+            .into_iter()
+            .map(|chunk| {
+                let chunk = chunk.trim_start_matches(|c: char| matches!(c, '-' | '•' | '>' | ' '));
+                chunk.chars().filter(|c| !matches!(c, '*' | '#' | '`' | '|' | '~')).collect::<String>().trim().to_string()
+            })
+            .filter(|chunk| chunk.chars().any(char::is_alphanumeric))
+            .collect()
     }
 }
 
@@ -452,5 +458,12 @@ mod tests {
         assert!(buffer.append("Phản hồi cũ").is_empty());
         buffer.clear();
         assert!(buffer.finish().is_empty());
+    }
+
+    #[test]
+    fn markdown_is_spoken_as_words_and_symbol_lines_are_dropped() {
+        let mut buffer = SentenceBuffer::default();
+        assert_eq!(buffer.append("**Kết quả:** chạy xong!\n---\n- Bước `cargo test` qua.\n"), ["Kết quả: chạy xong!", "Bước cargo test qua."]);
+        assert!(buffer.append("```\n").is_empty());
     }
 }

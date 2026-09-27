@@ -173,29 +173,53 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
         recent: recent.iter().map(memory::format_turn).collect(),
     };
     println!("STAGE intent_start_ms={}", audio::elapsed_ms());
-    let decision = if args.no_jev {
+    let mut decision = if args.no_jev {
         policy::decide_fallback(&turn)
     } else {
         match JevClient::from_env().and_then(|client| {
             client.system_one(&questions::build_state(&turn), &questions::questions())
         }) {
             Ok(answers) => policy::decide(&turn, &answers, &Thresholds::default()),
-            Err(_) => policy::decide_fallback(&turn),
+            Err(error) => {
+                // Stderr: the app forwards TIBO_ROUTE lines to its log; the turn itself goes on.
+                eprintln!("TIBO_ROUTE fallback reason={error:?}");
+                policy::decide_fallback(&turn)
+            }
         }
     };
     println!("STAGE intent_done_ms={}", audio::elapsed_ms());
-    let workflow = if args.emit_text && turn.session.pending_confirmation.is_none() && workflow_may_override(&decision) {
+    let computer_use = matches!(decision, policy::Decision::NeedConfirm { pending: policy::PendingAction::ComputerUse { .. }, .. });
+    let mut workflow = if args.emit_text && turn.session.pending_confirmation.is_none() && workflow_may_override(&decision) {
         let all = workflow::load();
-        workflow::find(&all, &turn.transcript).cloned()
+        // A computer-use request may only become a workflow that asks for approval itself.
+        workflow::find(&all, &turn.transcript).filter(|w| w.confirm || !computer_use).cloned()
     } else {
         None
     };
+    let mut prompt = turn.transcript.clone();
+    // Acting workflows (browser automation) wait for approval like any other computer use.
+    if let Some(acting) = workflow.take_if(|w| w.confirm) {
+        decision = policy::Decision::NeedConfirm {
+            say: format!("Cần phê duyệt: {} theo yêu cầu này. Nói 'xác nhận' hoặc 'huỷ'.", acting.name.to_lowercase()),
+            pending: policy::PendingAction::Workflow { id: acting.id, prompt: turn.transcript.clone() },
+        };
+    }
+    if let (true, policy::Decision::Session(policy::SessionAction::Confirm)) = (args.emit_text, &decision) {
+        if let Some(policy::PendingAction::Workflow { id, prompt: asked }) =
+            current_session.pending_confirmation.as_ref().map(|pending| pending.action.clone())
+        {
+            current_session.pending_confirmation = None;
+            let _ = session::save(&current_session);
+            workflow = workflow::load().into_iter().find(|w| w.id == id);
+            prompt = asked;
+        }
+    }
     if let Some(workflow) = &workflow {
         println!("STAGE workflow={}", workflow.id);
     }
     if args.emit_text && (workflow.is_some() || matches!(decision, policy::Decision::Chat)) {
         let payload = serde_json::json!({
-            "prompt": turn.transcript,
+            "prompt": prompt,
             "context": memory::context(&recent),
             "workflow": workflow.map(|w| serde_json::json!({ "id": w.id, "instructions": workflow::instructions(&w, now) })),
         });
@@ -212,6 +236,10 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
         return io::stdout().flush().map_err(|e| e.to_string());
     }
     let route = memory_route(&decision);
+    // The app's chat session carries the memory block from its start; tell it to reload.
+    if args.emit_text && matches!(decision, policy::Decision::Memory(_) | policy::Decision::Session(policy::SessionAction::Confirm)) {
+        println!("TIBO_MEMORY_CHANGED");
+    }
     let say = handlers::handle(decision, &mut current_session);
     if let (Some(route), Some(text), false) = (route, say.as_deref(), args.smoke) {
         memory::log_turn(&turn.transcript, text, route);
@@ -227,9 +255,9 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
 }
 
 /// A workflow trigger ("nhắc tôi", "hẹn giờ"…) beats a guessed route: plain chat, a clarifying
-/// question, the keyword fallback's closed commands or app/screen guesses, and the generic
-/// computer-use confirmation. Gates (not addressed, incomplete) and explicit memory, session and
-/// coding decisions keep priority.
+/// question, closed commands or app/screen guesses. The computer-use confirmation can only be
+/// replaced by a workflow marked `confirm:`, which asks for approval itself (see process_turn).
+/// Gates (not addressed, incomplete) and explicit memory, session and coding decisions keep priority.
 fn workflow_may_override(decision: &policy::Decision) -> bool {
     use policy::{Decision as D, PendingAction as P};
     matches!(
@@ -249,14 +277,13 @@ fn memory_route(decision: &policy::Decision) -> Option<&'static str> {
     use policy::{Decision as D, PendingAction as P};
     Some(match decision {
         D::Closed { .. } => "closed_command",
-        D::Coding { .. } => "coding_task",
         D::Session(_) => "session_control",
         D::Memory(_) => "memory",
         D::OpenApp { .. } => "computer_use",
         D::NeedConfirm { pending, .. } => match pending {
             P::Closed { .. } => "closed_command",
             P::Coding { .. } => "coding_task",
-            P::ComputerUse { .. } => "computer_use",
+            P::ComputerUse { .. } | P::Workflow { .. } => "computer_use",
             P::ForgetMemory { .. } => "memory",
         },
         D::Ignore { .. } | D::Incomplete | D::Clarify { .. } | D::Chat | D::ReadScreen { .. } => {

@@ -59,7 +59,6 @@ pub fn handle(decision: Decision, session: &mut Session) -> Option<String> {
             Some(say)
         }
         Decision::Closed { intent } => Some(run_closed(intent, false, session)),
-        Decision::Coding { agent, prompt } => Some(run_coding(agent, &prompt, session)),
         Decision::Session(action) => Some(run_session(action, session)),
         Decision::Memory(action) => Some(run_memory(action, session)),
     }
@@ -319,34 +318,6 @@ fn current_session_dir(root: &Path) -> Option<PathBuf> {
         .map(|entry| entry.path())
 }
 
-fn run_coding(agent: Agent, prompt: &str, session: &mut Session) -> String {
-    let command = "coding_task";
-    route_start(agent.as_str(), command, prompt);
-    let started = Instant::now();
-    let (status, summary) = if session.active {
-        (
-            "failed",
-            "Đang có tác vụ khác chạy; nói 'dừng' trước".into(),
-        )
-    } else {
-        match spawn_agent(agent, prompt, session, false) {
-            Ok(()) => (
-                "succeeded",
-                format!("Đã giao cho {}: {}", agent.as_str(), truncate(prompt, 60)),
-            ),
-            Err(error) => ("failed", error),
-        }
-    };
-    route_result(
-        agent.as_str(),
-        command,
-        status,
-        &summary,
-        started.elapsed().as_millis(),
-    );
-    summary
-}
-
 fn spawn_agent(
     agent: Agent,
     prompt: &str,
@@ -457,7 +428,14 @@ fn confirm_pending(session: &mut Session) -> (&'static str, String) {
             };
             (status, summary)
         }
-        PendingAction::Coding { agent, prompt } => {
+        PendingAction::Coding { agent, prompt, restart } => {
+            if session.active && !restart {
+                return ("failed", "Đang có tác vụ khác chạy; nói 'dừng' trước".into());
+            }
+            // An approved correction replaces the running task.
+            if session.active {
+                let _ = stop_session(session);
+            }
             match spawn_agent(agent, &prompt, session, false) {
                 Ok(()) => (
                     "succeeded",
@@ -483,6 +461,8 @@ fn confirm_pending(session: &mut Session) -> (&'static str, String) {
             }
         }
         PendingAction::ForgetMemory { line } => memory::forget(line.as_deref()),
+        // Approved workflows run in the app's agent; bin/tibo.rs intercepts them before this point.
+        PendingAction::Workflow { .. } => ("failed", "Quy trình này chỉ chạy trong app Tibo.".into()),
     }
 }
 
@@ -521,27 +501,23 @@ fn signal_session(
     }
 }
 
+/// A correction or addition restarts a write-capable agent, so it waits for approval like a new task.
 fn restart_session(session: &mut Session, text: String, append: bool) -> (&'static str, String) {
     let Some(agent) = session.agent else {
         return ("failed", "Hiện không có tác vụ nào đang chạy".into());
     };
-    let previous = session.task.clone().unwrap_or_default();
-    let _ = stop_session(session);
     let prompt = if append {
-        format!("{previous}\nThêm yêu cầu: {text}")
+        format!("{}\nThêm yêu cầu: {text}", session.task.as_deref().unwrap_or_default())
     } else {
         text
     };
-    match spawn_agent(agent, &prompt, session, false) {
-        Ok(()) => (
-            "succeeded",
-            format!(
-                "Đã khởi động lại với yêu cầu mới: {}",
-                truncate(&prompt, 60)
-            ),
-        ),
-        Err(error) => ("failed", error),
-    }
+    let say = format!(
+        "Cần phê duyệt: dừng tác vụ hiện tại và chạy lại với yêu cầu mới: {}. Nói 'xác nhận' hoặc 'huỷ'.",
+        truncate(&prompt, 60)
+    );
+    session.pending_confirmation = Some(session::pending(PendingAction::Coding { agent, prompt, restart: true }));
+    let _ = session::save(session);
+    ("approval_required", say)
 }
 
 fn status_summary(session: &Session) -> String {
@@ -623,6 +599,7 @@ fn pending_route(pending: &PendingAction) -> (&'static str, &'static str) {
         PendingAction::Coding { agent, .. } => (agent.as_str(), "coding_task"),
         PendingAction::ComputerUse { .. } => ("omp", "computer_use"),
         PendingAction::ForgetMemory { .. } => ("tibo", "memory.forget"),
+        PendingAction::Workflow { .. } => ("tibo", "workflow"),
     }
 }
 

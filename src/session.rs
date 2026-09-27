@@ -61,7 +61,7 @@ impl Session {
                 .as_ref()
                 .map(|pending| match &pending.action {
                     PendingAction::Closed { intent } => intent.as_str().to_string(),
-                    PendingAction::Coding { agent, prompt } => {
+                    PendingAction::Coding { agent, prompt, .. } => {
                         format!("{}: {}", agent.as_str(), prompt)
                     }
                     PendingAction::ComputerUse { prompt } => {
@@ -70,6 +70,7 @@ impl Session {
                     PendingAction::ForgetMemory { line } => {
                         format!("memory.forget: {}", line.as_deref().unwrap_or("toàn bộ"))
                     }
+                    PendingAction::Workflow { id, prompt } => format!("workflow {id}: {prompt}"),
                 }),
         }
     }
@@ -101,11 +102,15 @@ pub fn load() -> Session {
             Session::default()
         }
     };
-    if session
-        .pending_confirmation
-        .as_ref()
-        .is_some_and(|pending| pending.expires_at <= now_rfc3339())
-    {
+    // Compare instants, not strings: `rfc3339_after` falls back to a bare epoch if /bin/date fails,
+    // and "1790…" never sorts before "2026-…", so such a confirmation would never expire.
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    if session.pending_confirmation.as_ref().is_some_and(|pending| {
+        let expires = crate::memory::parse_rfc3339(&pending.expires_at)
+            .map(|(epoch, _)| epoch)
+            .or_else(|| pending.expires_at.parse().ok());
+        expires.is_none_or(|at| at <= now)
+    }) {
         session.pending_confirmation = None;
         let _ = save(&session);
     }

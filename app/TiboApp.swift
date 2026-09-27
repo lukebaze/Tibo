@@ -69,6 +69,18 @@ private struct TtsErrorEvent: Decodable {
     }
 }
 
+/// SIGTERM to an agent and its direct children (bash, osascript, curl started by a workflow), which
+/// Process.terminate() alone leaves running.
+/// ponytail: direct children only; use a process group if agents start deeper trees.
+private func terminateTree(_ process: Process) {
+    let kill = Process()
+    kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+    kill.arguments = ["-TERM", "-P", String(process.processIdentifier)]
+    try? kill.run()
+    kill.waitUntilExit()
+    process.terminate()
+}
+
 private final class LineReader {
     private var buffer = Data()
     private let handler: (String) -> Void
@@ -160,7 +172,7 @@ private final class PiSession {
         queued = nil
         try? input?.close()
         input = nil
-        process.terminate()
+        terminateTree(process)
     }
 
     /// An abort that lands before pi starts the run may never produce `agent_end`; don't let the
@@ -809,7 +821,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         var environment = backendEnvironment()
         let defaults = UserDefaults.standard
         environment["TIBO_PROJECT_ROOT"] = defaults.string(forKey: "projectRoot")?.nilIfEmpty ?? FileManager.default.homeDirectoryForCurrentUser.path
-        if environment["TYPESAFE_API_KEY"] == nil, let key = defaults.string(forKey: "typesafeApiKey")?.nilIfEmpty { environment["TYPESAFE_API_KEY"] = key }
+        // The key saved in Settings wins over one inherited from a shell that launched Tibo.
+        if let key = defaults.string(forKey: "typesafeApiKey")?.nilIfEmpty { environment["TYPESAFE_API_KEY"] = key }
         if environment["TIBO_WHISPER_URL"] == nil, whisperServer?.isRunning == true {
             environment["TIBO_WHISPER_URL"] = "http://127.0.0.1:\(whisperPort)/inference"
         }
@@ -824,7 +837,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
         let stderrReader = LineReader { line in
             // STT stage timings go to stderr so `tibo --transcribe` stdout stays transcript-only.
-            if line.hasPrefix("STAGE ") || line.hasPrefix("TIBO_STT ") || line.hasPrefix("TIBO_JEV ") {
+            if line.hasPrefix("STAGE ") || line.hasPrefix("TIBO_STT ") || line.hasPrefix("TIBO_JEV ") || line.hasPrefix("TIBO_ROUTE ") {
                 print("TIBO_BACKEND turn_id=\(id) \(line)")
             } else {
                 print("TIBO_BACKEND stderr_received turn_id=\(id)")
@@ -928,7 +941,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 print("TIBO_LLM_REQUEST malformed JSON ignored")
                 return
             }
-            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, request.workflow.map { "workflow:\($0.id)" } ?? "conversation"), turn: id, workflow: request.workflow, conversational: true)
+            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, request.workflow.map { "workflow:\($0.id)" } ?? "conversation"), turn: id, workflow: request.workflow, conversational: request.workflow == nil)
+        } else if line == "TIBO_MEMORY_CHANGED" {
+            // The chat session got the memory block when it started; the next chat starts fresh.
+            pi.stop()
         } else if line.hasPrefix("TIBO_SCREEN_REQUEST ") {
             let payload = line.dropFirst("TIBO_SCREEN_REQUEST ".count)
             guard let request = try? JSONDecoder().decode(ScreenRequest.self, from: Data(payload.utf8)) else {
@@ -1063,7 +1079,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
 
     /// `image` is attached for vision turns (pi/omp `@file`, codex `-i`) and deleted when the agent exits.
     /// Claude Code runs with no tools here, so it only gets the OCR text already in `prompt`.
-    /// A `workflow` turn is the one place the conversational agent may run commands (bash only).
+    /// A `workflow` turn is the one place an agent may run commands: one-shot, bash only.
     private func startAgent(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, image: URL? = nil, workflow: LlmRequest.Workflow? = nil, conversational: Bool = false) {
         let agent = currentProfile.agent
         guard let executable = AgentCLI.resolve(agent) else {
@@ -1073,9 +1089,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             state = .listening
             return
         }
-        // Screen turns carry untrusted screen text or images, so they stay one-shot without tools.
+        // Screen turns carry untrusted screen text or images, and workflow turns get bash, so both
+        // stay one-shot; only plain chat uses the tool-less conversation session.
         if agent == .pi && conversational {
-            runInConversation(prompt: prompt, context: context, memoryTurn: memoryTurn, turn: id, workflow: workflow, executable: executable)
+            runInConversation(prompt: prompt, context: context, memoryTurn: memoryTurn, turn: id, executable: executable)
             return
         }
         let process = Process()
@@ -1170,17 +1187,16 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
-    /// Chat and workflow turns for pi: one rpc session per conversation, started with bash and a
-    /// system prompt that allows it only for workflow turns. The memory block goes in once, at the
-    /// start; afterwards pi carries the conversation itself.
-    private func runInConversation(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, workflow: LlmRequest.Workflow?, executable: URL) {
+    /// Chat turns for pi: one tool-less rpc session per conversation. Workflows run one-shot with
+    /// bash (startAgent), so web pages or clipboard text they read never reach a shell-capable chat.
+    /// The memory block goes in once, at the start; TIBO_MEMORY_CHANGED restarts the session.
+    private func runInConversation(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, executable: URL) {
         if !pi.isAlive {
-            var system = llmSystemPrompt(canAct: true)
-                + " Công cụ bash chỉ dùng cho các khối Quy trình: khi tin nhắn mở đầu bằng một khối Quy trình, hoặc khi người dùng hỏi tiếp việc của một quy trình đã có trong cuộc trò chuyện này (ví dụ hỏi thời tiết nơi khác, đổi giờ nhắc việc), thì chỉ dùng đúng các lệnh quy trình đó đã cho. Ngoài ra chỉ trò chuyện, không chạy lệnh và không tuyên bố đã thao tác trên máy."
+            var system = llmSystemPrompt(canAct: false)
             if !context.isEmpty { system += "\n\n\(context)" }
             let model = currentProfile.agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
             do {
-                try pi.start(executable: executable, arguments: ["--tools", "bash", "--system-prompt", system] + (model.isEmpty ? [] : ["--model", model]))
+                try pi.start(executable: executable, arguments: ["--no-tools", "--system-prompt", system] + (model.isEmpty ? [] : ["--model", model]))
             } catch {
                 fail("Tôi chưa thể trả lời lúc này.")
                 sendTts(text: summary, final: true, turn: id)
@@ -1194,7 +1210,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         llmStartedAt = Date()
         summary = ""
         state = .processing
-        pi.prompt(workflow.map { "\($0.instructions)\n\nNgười dùng nói: \(prompt)" } ?? prompt, turn: id)
+        pi.prompt(prompt, turn: id)
     }
 
     private func handlePiEvent(_ line: String, turn id: Int) {
@@ -1296,14 +1312,15 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private func finishAgent(turn id: Int, failed: Bool) {
         guard id == turnID, !llmFinalSent else { return }
         llmFinalSent = true
-        if llmReceivedText, let memoryTurn = agentMemoryTurn {
+        // A run that died mid-answer is not an answer: don't remember it, and say it was cut.
+        if llmReceivedText, !failed, let memoryTurn = agentMemoryTurn {
             logMemoryTurn(user: memoryTurn.user, tibo: summary, route: memoryTurn.route)
         }
         agentMemoryTurn = nil
         keepAwake()
-        if !llmReceivedText && failed {
-            fail("Tôi chưa thể trả lời lúc này.")
-            sendTts(text: summary, final: true, turn: id)
+        if failed {
+            fail(llmReceivedText ? "Câu trả lời bị ngắt giữa chừng, bạn hỏi lại nhé." : "Tôi chưa thể trả lời lúc này.")
+            sendTts(text: llmReceivedText ? "" : summary, final: true, turn: id)
         } else {
             sendTts(text: "", final: true, turn: id)
             if !llmReceivedText { state = .listening }
@@ -1457,7 +1474,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         backendProcess?.terminate()
         backendProcess = nil
         backendRunning = false
-        agentProcess?.terminate()
+        if let agentProcess { terminateTree(agentProcess) }
         agentProcess = nil
         pi.abort()
         sendTtsCancel(turn: oldID)
@@ -2076,6 +2093,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // pi's rpc stdin is written from here; if pi dies mid-write, fail the write instead of dying.
         signal(SIGPIPE, SIG_IGN)
+        // Finder launches send stdout to /dev/null, and a redirected stdout is block-buffered, so turn
+        // traces (STAGE, TIBO_JEV, TIBO_ROUTE…) were lost. Keep a line-buffered log, reset past 5 MB.
+        if isatty(STDOUT_FILENO) == 0 {
+            let logs = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/tibo/logs")
+            try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+            let path = logs.appendingPathComponent("app.log").path
+            if let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int, size > 5_000_000 {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+            freopen(path, "a", stdout)
+        }
+        setvbuf(stdout, nil, _IOLBF, 0)
         // Two instances hear each other's TTS and answer every question twice; the running one wins.
         let me = NSRunningApplication.current
         if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
