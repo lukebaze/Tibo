@@ -594,6 +594,9 @@ private struct PermissionsPageView: View {
                 AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
                 refresh += 1
             }
+            PermissionRow(title: "Lời nhắc, Lịch, Ghi chú (quy trình trợ lý)", status: automationStatus) {
+                Self.requestAutomation { refresh += 1 }
+            }
             Divider()
             DoctorView()
         }
@@ -603,6 +606,36 @@ private struct PermissionsPageView: View {
     private var speechStatus: String { _ = refresh; switch SFSpeechRecognizer.authorizationStatus() { case .authorized: return "Đã cấp"; case .denied: return "Đã từ chối — mở Cài đặt hệ thống để cấp lại"; case .restricted: return "Bị giới hạn"; default: return "Chưa hỏi" } }
     private var screenStatus: String { _ = refresh; return CGPreflightScreenCaptureAccess() ? "Đã cấp" : "Chưa cấp — bật Tibo trong Cài đặt hệ thống, rồi mở lại Tibo" }
     private var accessibilityStatus: String { _ = refresh; return AXIsProcessTrusted() ? "Đã cấp" : "Chưa cấp — bật Tibo trong Cài đặt hệ thống › Trợ năng" }
+
+    private static let automationTargets = ["com.apple.reminders", "com.apple.iCal", "com.apple.Notes"]
+    private var automationStatus: String {
+        _ = refresh
+        let codes = Self.automationTargets.map { Self.automationPermission($0, ask: false) }
+        if codes.allSatisfy({ $0 == noErr }) { return "Đã cấp" }
+        if codes.contains(OSStatus(errAEEventNotPermitted)) { return "Đã từ chối — bật Tibo trong Cài đặt hệ thống › Quyền riêng tư › Tự động hoá" }
+        return "Chưa hỏi"
+    }
+    /// `procNotFound` when the app isn't running, so a denied/unknown answer needs the target open.
+    nonisolated private static func automationPermission(_ bundleID: String, ask: Bool) -> OSStatus {
+        let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        return AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, ask)
+    }
+    /// Opens each app hidden, then asks; the system prompt blocks, so this runs off the main thread.
+    private static func requestAutomation(done: @escaping @MainActor () -> Void) {
+        let group = DispatchGroup()
+        for id in automationTargets {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { continue }
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = false
+            config.hides = true
+            group.enter()
+            NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in group.leave() }
+        }
+        group.notify(queue: .global(qos: .userInitiated)) {
+            for id in automationTargets { _ = automationPermission(id, ask: true) }
+            Task { @MainActor in done() }
+        }
+    }
 }
 
 private struct DoctorView: View {

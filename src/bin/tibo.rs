@@ -4,7 +4,7 @@ use tibo::{
     memory, policy,
     profile,
     questions::{self, Thresholds, Turn},
-    session, tts,
+    session, tts, workflow,
 };
 use std::{
     env, fs,
@@ -181,9 +181,21 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
         }
     };
     println!("STAGE intent_done_ms={}", audio::elapsed_ms());
-    if args.emit_text && matches!(decision, policy::Decision::Chat) {
-        let payload =
-            serde_json::json!({ "prompt": turn.transcript, "context": memory::context(&recent) });
+    let workflow = if args.emit_text && turn.session.pending_confirmation.is_none() && workflow_may_override(&decision) {
+        let all = workflow::load();
+        workflow::find(&all, &turn.transcript).cloned()
+    } else {
+        None
+    };
+    if let Some(workflow) = &workflow {
+        println!("STAGE workflow={}", workflow.id);
+    }
+    if args.emit_text && (workflow.is_some() || matches!(decision, policy::Decision::Chat)) {
+        let payload = serde_json::json!({
+            "prompt": turn.transcript,
+            "context": memory::context(&recent),
+            "workflow": workflow.map(|w| serde_json::json!({ "id": w.id, "instructions": workflow::instructions(&w, now) })),
+        });
         println!("TIBO_LLM_REQUEST {payload}");
         return io::stdout().flush().map_err(|e| e.to_string());
     }
@@ -209,6 +221,23 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A workflow trigger ("nhắc tôi", "hẹn giờ"…) beats a guessed route: plain chat, a clarifying
+/// question, the keyword fallback's closed commands or app/screen guesses, and the generic
+/// computer-use confirmation. Gates (not addressed, incomplete) and explicit memory, session and
+/// coding decisions keep priority.
+fn workflow_may_override(decision: &policy::Decision) -> bool {
+    use policy::{Decision as D, PendingAction as P};
+    matches!(
+        decision,
+        D::Chat
+            | D::Clarify { .. }
+            | D::Closed { .. }
+            | D::OpenApp { .. }
+            | D::ReadScreen { .. }
+            | D::NeedConfirm { pending: P::ComputerUse { .. } | P::Closed { .. }, .. }
+    )
 }
 
 /// Turns the backend logs itself. Chat and screen answers are streamed by the app's agent, so the

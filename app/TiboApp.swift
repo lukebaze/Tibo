@@ -35,10 +35,16 @@ private struct ScreenRequest: Decodable {
     let context: String
 }
 
-/// Chat turn from the backend: `context` as in `ScreenRequest`.
+/// Chat turn from the backend: `context` as in `ScreenRequest`. `workflow` is set when the text hit
+/// a workflow trigger: its instructions join the system prompt and the agent gets a bash tool.
 private struct LlmRequest: Decodable {
+    struct Workflow: Decodable {
+        let id: String
+        let instructions: String
+    }
     let prompt: String
     let context: String
+    let workflow: Workflow?
 }
 
 private struct TtsWavEvent: Decodable {
@@ -785,7 +791,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 print("TIBO_LLM_REQUEST malformed JSON ignored")
                 return
             }
-            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, "conversation"), turn: id)
+            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, request.workflow.map { "workflow:\($0.id)" } ?? "conversation"), turn: id, workflow: request.workflow)
         } else if line.hasPrefix("TIBO_SCREEN_REQUEST ") {
             let payload = line.dropFirst("TIBO_SCREEN_REQUEST ".count)
             guard let request = try? JSONDecoder().decode(ScreenRequest.self, from: Data(payload.utf8)) else {
@@ -920,7 +926,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
 
     /// `image` is attached for vision turns (pi/omp `@file`, codex `-i`) and deleted when the agent exits.
     /// Claude Code runs with no tools here, so it only gets the OCR text already in `prompt`.
-    private func startAgent(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, image: URL? = nil) {
+    /// A `workflow` turn is the one place the conversational agent may run commands (bash only).
+    private func startAgent(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, image: URL? = nil, workflow: LlmRequest.Workflow? = nil) {
         let agent = currentProfile.agent
         guard let executable = AgentCLI.resolve(agent) else {
             let text = "Chưa cài \(agent.title)."
@@ -932,7 +939,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         let process = Process()
         let output = Pipe()
         let error = Pipe()
-        let systemPrompt = context.isEmpty ? llmSystemPrompt : "\(llmSystemPrompt)\n\n\(context)"
+        let base = workflow.map { "\(llmSystemPrompt(canAct: true))\n\n\($0.instructions)" } ?? llmSystemPrompt(canAct: false)
+        let systemPrompt = context.isEmpty ? base : "\(base)\n\n\(context)"
+        let tools = workflow != nil
+        let attachment: [String] = image.map { ["@\($0.path)"] } ?? []
         process.executableURL = executable
         switch agent {
         case .claude:
@@ -942,21 +952,25 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 "--verbose",
                 "--include-partial-messages",
                 "--setting-sources", "local",
-                "--permission-mode", "plan",
+                "--permission-mode", tools ? "default" : "plan",
                 "--no-session-persistence",
-                "--tools", "",
+                "--tools", tools ? "Bash" : "",
                 "--system-prompt", systemPrompt
-            ]
+            ] + (tools ? ["--allowedTools", "Bash"] : [])
         case .omp:
-            process.arguments = ["-p", "--mode=json", "--no-tools", "--system-prompt=\(systemPrompt)"]
-                + (image.map { ["@\($0.path)"] } ?? []) + [prompt]
+            let toolArgs: [String] = tools ? ["--tools=bash", "--auto-approve"] : ["--no-tools"]
+            process.arguments = ["-p", "--mode=json"] + toolArgs + ["--system-prompt=\(systemPrompt)"] + attachment + [prompt]
         case .pi:
             let model = currentProfile.agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
-            process.arguments = ["-p", "--mode", "json", "--no-tools", "--system-prompt", systemPrompt]
-                + (model.isEmpty ? [] : ["--model", model]) + (image.map { ["@\($0.path)"] } ?? []) + [prompt]
+            let toolArgs: [String] = tools ? ["--tools", "bash"] : ["--no-tools"]
+            let modelArgs: [String] = model.isEmpty ? [] : ["--model", model]
+            process.arguments = ["-p", "--mode", "json"] + toolArgs + ["--system-prompt", systemPrompt] + modelArgs + attachment + [prompt]
         case .codex:
-            process.arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only"]
-                + (image.map { ["-i", $0.path] } ?? []) + ["\(systemPrompt)\n\n\(prompt)"]
+            // Workflows drive Reminders/Calendar over Apple Events and reach the network, which the
+            // read-only sandbox blocks; the workflow instructions are the guardrail on those turns.
+            let sandbox: [String] = tools ? ["--dangerously-bypass-approvals-and-sandbox"] : ["--sandbox", "read-only"]
+            let imageArgs: [String] = image.map { ["-i", $0.path] } ?? []
+            process.arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral"] + sandbox + imageArgs + ["\(systemPrompt)\n\n\(prompt)"]
         }
         process.environment = AgentCLI.environment()
         process.standardOutput = output
@@ -1014,9 +1028,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
-    private var llmSystemPrompt: String {
+    /// `canAct` drops the "never claim you acted" rule for workflow turns, where the agent really runs commands.
+    private func llmSystemPrompt(canAct: Bool) -> String {
         let assistant = currentProfile.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
-        var prompt = "Bạn là \(assistant.isEmpty ? "Tibo" : assistant), trợ lý giọng nói trên macOS. Câu trả lời sẽ được đọc thành tiếng, nên hãy nói như đang trò chuyện: thật ngắn gọn, thường một câu, tối đa hai câu, đi thẳng vào ý chính. Dùng tiếng Việt tự nhiên, thân thiện; không Markdown, không gạch đầu dòng, không emoji, không rào đón, không nhắc lại câu hỏi. Kể cả khi được hỏi \"giải thích\" hay \"là gì\", chỉ nêu ý cốt lõi trong một hai câu; chỉ nói dài khi người dùng nói rõ muốn nghe chi tiết. Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng."
+        var prompt = "Bạn là \(assistant.isEmpty ? "Tibo" : assistant), trợ lý giọng nói trên macOS. Câu trả lời sẽ được đọc thành tiếng, nên hãy nói như đang trò chuyện: thật ngắn gọn, thường một câu, tối đa hai câu, đi thẳng vào ý chính. Dùng tiếng Việt tự nhiên, thân thiện; không Markdown, không gạch đầu dòng, không emoji, không rào đón, không nhắc lại câu hỏi. Kể cả khi được hỏi \"giải thích\" hay \"là gì\", chỉ nêu ý cốt lõi trong một hai câu; chỉ nói dài khi người dùng nói rõ muốn nghe chi tiết."
+        if !canAct { prompt += " Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng." }
         let user = currentProfile.userName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !user.isEmpty { prompt += " Người dùng tên là \(user)." }
         return prompt

@@ -7,3 +7,4 @@ pub mod questions;
 pub mod profile;
 pub mod session;
 pub mod tts;
+pub mod workflow;

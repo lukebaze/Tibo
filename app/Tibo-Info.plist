@@ -15,6 +15,7 @@
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSMicrophoneUsageDescription</key><string>Tibo uses the microphone for local voice commands.</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>Tibo uses speech recognition to transcribe Vietnamese voice commands.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Tibo điều khiển Lời nhắc, Lịch, Ghi chú và Chrome khi bạn nhờ tạo nhắc việc, xem lịch, ghi chú hay thao tác web.</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
