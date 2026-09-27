@@ -74,6 +74,66 @@ def load_voicepack(path: Path) -> np.ndarray:
     return styles
 
 
+DIGITS = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
+SCALES = ["", " nghìn", " triệu", " tỷ"]
+
+
+def _hundreds(n: int, full: bool) -> str:
+    """0 < n < 1000. `full` spells a leading "không trăm" / "linh" inside a larger number (1005 → một nghìn không trăm linh năm)."""
+    h, t, u = n // 100, n // 10 % 10, n % 10
+    words = []
+    if h or full:
+        words += [DIGITS[h], "trăm"]
+    if t == 0:
+        if u and words:
+            words.append("linh")
+    elif t == 1:
+        words.append("mười")
+    else:
+        words += [DIGITS[t], "mươi"]
+    if u:
+        if u == 1 and t >= 2:
+            words.append("mốt")
+        elif u == 4 and t >= 2:
+            words.append("tư")
+        elif u == 5 and t >= 1:
+            words.append("lăm")
+        else:
+            words.append(DIGITS[u])
+    return " ".join(words)
+
+
+def number_words(n: int) -> str:
+    if n == 0:
+        return "không"
+    # ponytail: scales stop at tỷ; numbers ≥ 10^12 read wrong, rare in speech
+    groups = []
+    while n:
+        groups.append(n % 1000)
+        n //= 1000
+    words = []
+    for i in range(len(groups) - 1, -1, -1):
+        if groups[i]:
+            words.append(_hundreds(groups[i], full=i < len(groups) - 1) + SCALES[min(i, 3)])
+    return " ".join(words)
+
+
+def numbers_to_words(text: str) -> str:
+    """vig2p drops digits, so spell numbers the way Vietnamese is read aloud."""
+
+    def decimal(whole: str, frac: str) -> str:
+        spoken = number_words(int(whole)) + " phẩy "
+        # "12,5" → mười hai phẩy năm; "3,05" → ba phẩy không năm
+        return spoken + (number_words(int(frac)) if not frac.startswith("0") else " ".join(DIGITS[int(d)] for d in frac))
+
+    text = re.sub(r"\b(\d{1,2})[hg:](\d{2})\b", lambda m: f"{number_words(int(m[1]))} giờ {number_words(int(m[2]))}", text)
+    text = re.sub(r"\b(\d{1,2})h\b", lambda m: f"{number_words(int(m[1]))} giờ", text)
+    text = re.sub(r"\b\d{1,3}(?:\.\d{3})+\b", lambda m: m[0].replace(".", ""), text)  # 1.500.000
+    text = re.sub(r"\b(\d+)[,.](\d+)\b", lambda m: decimal(m[1], m[2]), text)
+    text = re.sub(r"\d+", lambda m: number_words(int(m[0])), text)
+    return text.replace("%", " phần trăm")
+
+
 def split_text(text: str) -> list[str]:
     normalized = re.sub(r"\s+", " ", text.strip())
     if not normalized:
@@ -166,7 +226,7 @@ class KokoroEngine:
         if not text.strip():
             raise ValueError("text must not be empty")
         audio_chunks: list[np.ndarray] = []
-        for chunk in split_text(text):
+        for chunk in split_text(numbers_to_words(text)):
             phonemes = self.phonemize(chunk)
             if not phonemes:
                 continue
@@ -208,5 +268,16 @@ def serve(args: argparse.Namespace) -> None:
             print(f"ERR {encoded_error}", flush=True)
 
 
+def self_test() -> None:
+    for n, words in {21: "hai mươi mốt", 24: "hai mươi tư", 25: "hai mươi lăm", 105: "một trăm linh năm",
+                     1005: "một nghìn không trăm linh năm", 1500000: "một triệu năm trăm nghìn"}.items():
+        assert number_words(n) == words, (n, number_words(n))
+    assert numbers_to_words("9h30, 1.500.000 đồng, 12,5%") == "chín giờ ba mươi, một triệu năm trăm nghìn đồng, mười hai phẩy năm phần trăm"
+    print("ok")
+
+
 if __name__ == "__main__":
-    serve(parse_args())
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+    else:
+        serve(parse_args())
