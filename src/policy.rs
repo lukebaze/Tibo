@@ -87,6 +87,16 @@ pub enum PendingAction {
     Closed { intent: ClosedIntent },
     Coding { agent: Agent, prompt: String },
     ComputerUse { prompt: String },
+    /// `line: None` forgets the whole memory.
+    ForgetMemory { line: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryAction {
+    Remember { fact: String },
+    Recall,
+    Forget { query: String },
+    ForgetAll,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +111,7 @@ pub enum Decision {
     /// Read-only question about the current screen; `vision` attaches the screenshot, otherwise OCR text only.
     ReadScreen { vision: bool },
     Chat,
+    Memory(MemoryAction),
     NeedConfirm { pending: PendingAction, say: String },
 }
 
@@ -177,6 +188,12 @@ pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decisi
             let Some((name, confidence)) = choice(answers, "closed_command") else {
                 return unclear();
             };
+            if let Some(kind) = name.strip_prefix("memory.") {
+                if confidence < thresholds.closed_conf_min {
+                    return unclear();
+                }
+                return memory_decision(kind, &turn.transcript);
+            }
             let Some(intent) = ClosedIntent::parse(name) else {
                 return unclear();
             };
@@ -268,6 +285,9 @@ pub fn decide_fallback(turn: &Turn) -> Decision {
             say: "Bạn xác nhận hay huỷ lệnh đang chờ?".into(),
         };
     }
+    if let Some(decision) = memory_fallback(&turn.transcript) {
+        return decision;
+    }
     if turn.session.active {
         if contains_any(&text, &["dung", "khoan", "stop"]) {
             return Decision::Session(SessionAction::Stop);
@@ -347,6 +367,88 @@ fn needs_vision(transcript: &str) -> bool {
     ]
     .iter()
     .any(|word| text.contains(word))
+}
+
+const REMEMBER_TRIGGERS: &[&[&str]] = &[
+    &["ghi", "nho", "la"],
+    &["ghi", "nho", "rang"],
+    &["ghi", "nho"],
+    &["nho", "giup", "toi", "la"],
+    &["nho", "la"],
+    &["nho", "rang"],
+    &["remember", "that"],
+    &["remember"],
+];
+const FORGET_TRIGGERS: &[&[&str]] = &[&["quen"], &["forget"]];
+
+/// Text after a trigger that opens the utterance (optionally after hãy/bạn/này/ơi), original
+/// wording kept; `skip` words right after the trigger and `tail` fillers at the end are dropped.
+/// ponytail: start-anchored keywords only; Jev's closed_command covers other phrasings.
+fn words_after(transcript: &str, triggers: &[&[&str]], skip: &[&str], tail: &[&str]) -> Option<String> {
+    let original: Vec<&str> = transcript.split_whitespace().collect();
+    let norm: Vec<String> = original
+        .iter()
+        .map(|word| normalize(word).trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+        .collect();
+    let lead = norm.first().is_some_and(|w| matches!(w.as_str(), "hay" | "ban" | "nay" | "oi"));
+    for start in 0..=usize::from(lead) {
+        for trigger in triggers {
+            let end = start + trigger.len();
+            if norm.len() < end || norm[start..end].iter().zip(trigger.iter()).any(|(a, b)| a != b) {
+                continue;
+            }
+            let mut from = end;
+            while from < norm.len() && skip.contains(&norm[from].as_str()) {
+                from += 1;
+            }
+            let mut to = norm.len();
+            while to > from && tail.contains(&norm[to - 1].as_str()) {
+                to -= 1;
+            }
+            let text = original[from..to].join(" ");
+            return Some(text.trim_matches(|c: char| matches!(c, ',' | '.' | '!' | '?' | ':')).trim().into());
+        }
+    }
+    None
+}
+
+fn memory_decision(kind: &str, transcript: &str) -> Decision {
+    match kind {
+        "recall" => Decision::Memory(MemoryAction::Recall),
+        "remember" => {
+            let fact = words_after(transcript, REMEMBER_TRIGGERS, &["la", "rang", "that"], &["nhe", "nha"])
+                .unwrap_or_else(|| transcript.trim().into());
+            if fact.is_empty() {
+                Decision::Clarify { say: "Bạn muốn mình nhớ điều gì?".into() }
+            } else {
+                Decision::Memory(MemoryAction::Remember { fact })
+            }
+        }
+        "forget" => {
+            let skip = ["di", "chuyen", "viec", "dieu", "la", "rang", "ve", "cai", "about"];
+            let query = words_after(transcript, FORGET_TRIGGERS, &skip, &["di", "nhe", "nha"])
+                .unwrap_or_else(|| transcript.trim().into());
+            match normalize(&query).as_str() {
+                "" => Decision::Clarify { say: "Bạn muốn mình quên chuyện gì?".into() },
+                "het" | "tat ca" | "het tat ca" | "moi thu" | "het moi thu" | "everything" | "all" => {
+                    Decision::Memory(MemoryAction::ForgetAll)
+                }
+                _ => Decision::Memory(MemoryAction::Forget { query }),
+            }
+        }
+        _ => unclear(),
+    }
+}
+
+fn memory_fallback(transcript: &str) -> Option<Decision> {
+    let text = normalize(transcript);
+    if contains_any(&text, &["nho gi ve", "nho nhung gi", "biet gi ve toi", "remember about me"]) {
+        return Some(Decision::Memory(MemoryAction::Recall));
+    }
+    if words_after(transcript, REMEMBER_TRIGGERS, &[], &[]).is_some() {
+        return Some(memory_decision("remember", transcript));
+    }
+    words_after(transcript, FORGET_TRIGGERS, &[], &[]).map(|_| memory_decision("forget", transcript))
 }
 
 fn confirmation(pending: PendingAction, description: &str) -> Decision {
@@ -486,6 +588,7 @@ mod tests {
             asr_language: "vi".into(),
             interrupted: false,
             session: SessionSnapshot::default(),
+            recent: Vec::new(),
         }
     }
 
@@ -769,6 +872,21 @@ mod tests {
             }
         );
         assert_eq!(decide_fallback(&turn("hôm nay thế nào")), Decision::Chat);
+    }
+
+    #[test]
+    fn fallback_memory_commands_extract_their_object() {
+        let remember = |fact: &str| Decision::Memory(MemoryAction::Remember { fact: fact.into() });
+        assert_eq!(decide_fallback(&turn("nhớ là tôi thích trả lời ngắn nhé")), remember("tôi thích trả lời ngắn"));
+        assert_eq!(decide_fallback(&turn("hãy ghi nhớ rằng mai họp 9 giờ.")), remember("mai họp 9 giờ"));
+        assert_eq!(decide_fallback(&turn("bạn nhớ gì về tôi?")), Decision::Memory(MemoryAction::Recall));
+        assert_eq!(
+            decide_fallback(&turn("quên chuyện cà phê đi")),
+            Decision::Memory(MemoryAction::Forget { query: "cà phê".into() })
+        );
+        assert_eq!(decide_fallback(&turn("quên hết đi")), Decision::Memory(MemoryAction::ForgetAll));
+        assert!(matches!(decide_fallback(&turn("quên đi")), Decision::Clarify { .. }));
+        assert_eq!(decide_fallback(&turn("tôi nhớ là hôm qua trời mưa")), Decision::Chat, "only command-initial triggers");
     }
 
     fn set_choice(answers: &mut Answers, id: &str, value: &str) {

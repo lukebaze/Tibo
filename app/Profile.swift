@@ -88,6 +88,8 @@ struct Profile: Codable, Equatable {
     var hoverMargin: Double = 6
     /// Seconds the expanded notch stays open after the pointer leaves.
     var collapseDelay: Double = 1.2
+    /// Tibo's own memory (`src/memory.rs`): off = no turn log, no facts, no memory in the prompt.
+    var memoryEnabled = true
 }
 
 @MainActor

@@ -191,6 +191,7 @@ private struct OnboardingView: View {
             summaryRow("Microphone", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "Đã cấp quyền" : "Chưa cấp quyền")
             summaryRow("Cách nghe", draft.voiceMode.title)
             summaryRow("Trả lời bằng giọng", draft.speakReplies ? (draft.readEveryAnswer ? "Mọi câu" : "Khi hỏi bằng giọng") : "Tắt")
+            summaryRow("Trí nhớ", draft.memoryEnabled ? "Bật" : "Tắt")
             summaryRow("Vị trí notch", draft.notchPosition.title)
             Text("Bạn có thể thay đổi mọi lựa chọn trong Cài đặt.").foregroundStyle(.secondary).padding(.top, 8)
         }
@@ -624,6 +625,10 @@ private struct ListenPageView: View {
                 Toggle("Cho \(draft.assistantName) nói", isOn: $draft.speakReplies)
                 Toggle("Đọc to mọi câu trả lời, kể cả khi hỏi bằng cách gõ", isOn: $draft.readEveryAnswer).disabled(!draft.speakReplies)
                 Text("Khi không đọc, câu trả lời hiện chữ trên notch.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Trí nhớ") {
+                Toggle("Cho \(draft.assistantName) nhớ các cuộc trò chuyện", isOn: $draft.memoryEnabled)
+                Text("Lưu trong ~/.local/share/tibo/memory trên máy này. Nói “quên hết” để xoá.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)
     }

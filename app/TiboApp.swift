@@ -31,6 +31,14 @@ private struct NativeAction: Decodable {
 private struct ScreenRequest: Decodable {
     let question: String
     let vision: Bool
+    /// Tibo's memory block (facts, recent days, live conversation) for the end of the system prompt.
+    let context: String
+}
+
+/// Chat turn from the backend: `context` as in `ScreenRequest`.
+private struct LlmRequest: Decodable {
+    let prompt: String
+    let context: String
 }
 
 private struct TtsWavEvent: Decodable {
@@ -194,6 +202,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var agentReaders: [LineReader] = []
     private var llmReceivedText = false
     private var llmFinalSent = false
+    /// User text and route of the running agent turn, logged to memory once the answer is complete.
+    private var agentMemoryTurn: (user: String, route: String)?
     private var llmStartedAt = Date.distantPast
     private var turnStartedAt = Date.distantPast
     private var loggedFirstAudio = false
@@ -771,11 +781,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             sendTts(text: text, final: true, turn: id)
         } else if line.hasPrefix("TIBO_LLM_REQUEST ") {
             let payload = line.dropFirst("TIBO_LLM_REQUEST ".count)
-            guard let prompt = try? JSONDecoder().decode(String.self, from: Data(payload.utf8)) else {
+            guard let request = try? JSONDecoder().decode(LlmRequest.self, from: Data(payload.utf8)) else {
                 print("TIBO_LLM_REQUEST malformed JSON ignored")
                 return
             }
-            startAgent(prompt: prompt, turn: id)
+            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, "conversation"), turn: id)
         } else if line.hasPrefix("TIBO_SCREEN_REQUEST ") {
             let payload = line.dropFirst("TIBO_SCREEN_REQUEST ".count)
             guard let request = try? JSONDecoder().decode(ScreenRequest.self, from: Data(payload.utf8)) else {
@@ -827,7 +837,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 prompt += "Chữ đọc được trên màn hình (OCR, có thể sai, từ trên xuống):\n\(text.isEmpty ? "(không có chữ)" : text)"
                 if request.vision { prompt += "\nẢnh chụp màn hình được đính kèm." }
                 print("TIBO_SCREEN turn_id=\(id) vision=\(request.vision) ocr_lines=\(lines.count)")
-                self.startAgent(prompt: prompt, turn: id, image: request.vision ? url : nil)
+                self.startAgent(prompt: prompt, context: request.context, memoryTurn: (request.question, "read_screen"), turn: id, image: request.vision ? url : nil)
                 if !request.vision { try? FileManager.default.removeItem(at: url) }
             }
         }
@@ -910,7 +920,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
 
     /// `image` is attached for vision turns (pi/omp `@file`, codex `-i`) and deleted when the agent exits.
     /// Claude Code runs with no tools here, so it only gets the OCR text already in `prompt`.
-    private func startAgent(prompt: String, turn id: Int, image: URL? = nil) {
+    private func startAgent(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, image: URL? = nil) {
         let agent = currentProfile.agent
         guard let executable = AgentCLI.resolve(agent) else {
             let text = "Chưa cài \(agent.title)."
@@ -922,7 +932,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         let process = Process()
         let output = Pipe()
         let error = Pipe()
-        let systemPrompt = llmSystemPrompt
+        let systemPrompt = context.isEmpty ? llmSystemPrompt : "\(llmSystemPrompt)\n\n\(context)"
         process.executableURL = executable
         switch agent {
         case .claude:
@@ -953,6 +963,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         process.standardError = error
         llmReceivedText = false
         llmFinalSent = false
+        agentMemoryTurn = memoryTurn
         llmStartedAt = Date()
         summary = ""
         state = .processing
@@ -1071,6 +1082,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private func finishAgent(turn id: Int, failed: Bool) {
         guard id == turnID, !llmFinalSent else { return }
         llmFinalSent = true
+        if llmReceivedText, let memoryTurn = agentMemoryTurn {
+            logMemoryTurn(user: memoryTurn.user, tibo: summary, route: memoryTurn.route)
+        }
+        agentMemoryTurn = nil
         if !llmReceivedText && failed {
             fail("Tôi chưa thể trả lời lúc này.")
             sendTts(text: summary, final: true, turn: id)
@@ -1078,6 +1093,22 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             sendTts(text: "", final: true, turn: id)
             if !llmReceivedText { state = .listening }
         }
+    }
+
+    /// The backend owns the memory files (format, redaction, the memory switch), so the app hands it
+    /// the finished turn instead of writing the log itself.
+    private func logMemoryTurn(user: String, tibo: String, route: String) {
+        guard let executable = Bundle.main.resourceURL?.appendingPathComponent("tibo"),
+              let data = try? JSONSerialization.data(withJSONObject: ["user": user, "tibo": tibo, "route": route]),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["--log-turn", json]
+        process.environment = backendEnvironment()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { print("TIBO_MEMORY log_turn_failed \(error.localizedDescription)") }
     }
 
     private var effectiveSttEngine: Profile.SttEngine {

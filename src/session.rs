@@ -67,6 +67,9 @@ impl Session {
                     PendingAction::ComputerUse { prompt } => {
                         format!("computer_use: {prompt}")
                     }
+                    PendingAction::ForgetMemory { line } => {
+                        format!("memory.forget: {}", line.as_deref().unwrap_or("toàn bộ"))
+                    }
                 }),
         }
     }

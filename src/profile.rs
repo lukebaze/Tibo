@@ -19,6 +19,9 @@ fn default_stt_engine() -> String {
 fn default_whisper_model() -> String {
     "ggml-large-v3-turbo-q5_0.bin".into()
 }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
@@ -31,6 +34,8 @@ pub struct Profile {
     pub wake_words: Vec<String>,
     pub vocabulary: Vec<Term>,
     pub agent: String,
+    /// `--model` for pi; empty = pi's own default.
+    pub agent_model: String,
     #[serde(default = "default_tts_engine")]
     pub tts_engine: String,
     #[serde(default = "default_tts_voice")]
@@ -39,6 +44,9 @@ pub struct Profile {
     pub stt_engine: String,
     #[serde(default = "default_whisper_model")]
     pub whisper_model: String,
+    /// Tibo's own memory (`crate::memory`): off = nothing logged, no context injected.
+    #[serde(default = "default_true")]
+    pub memory_enabled: bool,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -56,6 +64,7 @@ fn default_profile() -> Profile {
         tts_voice: default_tts_voice(),
         stt_engine: default_stt_engine(),
         whisper_model: default_whisper_model(),
+        memory_enabled: true,
         ..Default::default()
     }
 }

@@ -1,6 +1,7 @@
 use crate::{
     audio::elapsed_ms,
-    policy::{Agent, ClosedIntent, Decision, PendingAction, SessionAction},
+    memory,
+    policy::{Agent, ClosedIntent, Decision, MemoryAction, PendingAction, SessionAction},
     session::{self, Session},
 };
 use serde_json::{json, Value};
@@ -60,6 +61,7 @@ pub fn handle(decision: Decision, session: &mut Session) -> Option<String> {
         Decision::Closed { intent } => Some(run_closed(intent, false, session)),
         Decision::Coding { agent, prompt } => Some(run_coding(agent, &prompt, session)),
         Decision::Session(action) => Some(run_session(action, session)),
+        Decision::Memory(action) => Some(run_memory(action, session)),
     }
 }
 
@@ -91,6 +93,34 @@ fn run_closed(intent: ClosedIntent, confirmed: bool, session: &mut Session) -> S
         session.pending_confirmation = Some(session::pending(PendingAction::Closed { intent }));
         let _ = session::save(session);
     }
+    summary
+}
+
+fn run_memory(action: MemoryAction, session: &mut Session) -> String {
+    let command = match &action {
+        MemoryAction::Remember { .. } => "memory.remember",
+        MemoryAction::Recall => "memory.recall",
+        MemoryAction::Forget { .. } | MemoryAction::ForgetAll => "memory.forget",
+    };
+    route_start("tibo", command, command);
+    let ask = |line: Option<String>, say: String, session: &mut Session| {
+        session.pending_confirmation = Some(session::pending(PendingAction::ForgetMemory { line }));
+        let _ = session::save(session);
+        ("approval_required", format!("{say} Nói 'xác nhận' hoặc 'huỷ'."))
+    };
+    let (status, summary) = match action {
+        MemoryAction::Remember { fact } => memory::remember(&fact),
+        MemoryAction::Recall => ("succeeded", memory::recall()),
+        MemoryAction::Forget { query } => match memory::best_match(&memory::read_facts(), &query) {
+            Some(line) => {
+                let say = format!("Mình sẽ quên: {}.", memory::spoken_fact(&line));
+                ask(Some(line), say, session)
+            }
+            None => ("succeeded", "Mình không nhớ gì về chuyện đó.".into()),
+        },
+        MemoryAction::ForgetAll => ask(None, "Mình sẽ quên toàn bộ trí nhớ về bạn.".into(), session),
+    };
+    route_result("tibo", command, status, &summary, 0);
     summary
 }
 
@@ -452,6 +482,7 @@ fn confirm_pending(session: &mut Session) -> (&'static str, String) {
                 }
             }
         }
+        PendingAction::ForgetMemory { line } => memory::forget(line.as_deref()),
     }
 }
 
@@ -591,6 +622,7 @@ fn pending_route(pending: &PendingAction) -> (&'static str, &'static str) {
         PendingAction::Closed { intent } => (intent_agent(*intent), intent.as_str()),
         PendingAction::Coding { agent, .. } => (agent.as_str(), "coding_task"),
         PendingAction::ComputerUse { .. } => ("omp", "computer_use"),
+        PendingAction::ForgetMemory { .. } => ("tibo", "memory.forget"),
     }
 }
 

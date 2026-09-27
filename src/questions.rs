@@ -17,6 +17,9 @@ pub struct Turn {
     pub asr_language: String,
     pub interrupted: bool,
     pub session: SessionSnapshot,
+    /// Latest logged turns (`memory::recent_turns`), so follow-ups like "còn Đức?" keep their route.
+    #[serde(default)]
+    pub recent: Vec<String>,
 }
 
 pub fn build_state(turn: &Turn) -> Value {
@@ -37,7 +40,8 @@ pub fn build_state(turn: &Turn) -> Value {
             "task": turn.session.task,
             "status": turn.session.status,
             "pending_confirmation": turn.session.pending_confirmation
-        }
+        },
+        "recent_conversation": turn.recent
     })
 }
 
@@ -62,10 +66,10 @@ pub fn questions() -> Value {
         },
         "route": {
             "type": "choice",
-            "instructions": "Classify the user's intent. The transcript may be Vietnamese, mixed Vietnamese-English, and imperfect ASR. Use active session context: a short correction or addition refers to session.task. Choose unclear only when the utterance truly lacks an action or object, not merely because Vietnamese wording is informal.",
+            "instructions": "Classify the user's intent. The transcript may be Vietnamese, mixed Vietnamese-English, and imperfect ASR. Use active session context: a short correction or addition refers to session.task. A short follow-up such as còn Đức? or còn cái kia? continues recent_conversation and keeps its route. Choose unclear only when the utterance truly lacks an action or object, not merely because Vietnamese wording is informal.",
             "criteria": {
                 "session_control": "Control the active session: dừng/dừng lại/khoan=stop, tạm dừng/pause=pause, tiếp tục=continue, đến đâu rồi/status=status, không dùng codex để làm lại/sửa yêu cầu=correct, thêm cả smoke test/bổ sung kiểm tra lỗi mạng=append, xác nhận=confirm, huỷ/cancel=cancel.",
-                "closed_command": "One fixed command: list/status OMP agents; review/audit the current diff with Claude; run/measure benchmark; validate/run Eva; delete/purge/dọn sạch all OMP sessions or session history. Examples: dọn sạch lịch sử phiên; trạng thái các tác tử omp; duyệt code tôi vừa sửa; đo benchmark tiếng việt.",
+                "closed_command": "One fixed command: list/status OMP agents; review/audit the current diff with Claude; run/measure benchmark; validate/run Eva; delete/purge/dọn sạch all OMP sessions or session history; remember, recall, or forget something about the user. Examples: dọn sạch lịch sử phiên; trạng thái các tác tử omp; duyệt code tôi vừa sửa; đo benchmark tiếng việt; nhớ là tôi thích trả lời ngắn; bạn nhớ gì về tôi; quên chuyện cà phê.",
                 "coding_task": "An open-ended software task that changes or investigates source code, including implementing UI appearance. Examples: đổi màu nút chính sang xanh; sửa lỗi đăng nhập; thêm endpoint; refactor auth. Do not classify source-code UI changes as computer_use.",
                 "computer_use": "Operate or look at the actual macOS application, browser, website, payment, or GUI outside source code, including questions about what is currently on screen. Examples: mở Safari; open Safari rồi vào GitHub; thanh toán hoá đơn; trên màn hình đang có gì; lỗi này nghĩa là gì; tóm tắt trang đang mở; dịch đoạn này sang tiếng Anh. A missing website or app target such as vào trang rồi is unclear.",
                 "conversation": format!("Complete non-actionable conversation directed to {name}."),
@@ -106,6 +110,9 @@ pub fn questions() -> Value {
                 "codex.run_benchmark": "Run, measure, bench, or đo Tibo's benchmark. Examples: bench hiệu năng phân loại; đo benchmark tiếng việt.",
                 "eva.run_evaluation": "Validate, inspect, or run the local Eva evaluation. Examples: kiểm tra bộ dữ liệu eva; validate eva.",
                 "omp.delete_all_sessions": "Delete, clear, purge, dọn sạch, or remove all OMP sessions/history.",
+                "memory.remember": format!("Ask {name} to remember a fact about the user. Examples: nhớ là tôi thích trả lời ngắn; ghi nhớ giúp tôi là mai họp 9 giờ."),
+                "memory.recall": format!("Ask what {name} remembers about the user. Examples: bạn nhớ gì về tôi; {name} biết gì về tôi."),
+                "memory.forget": format!("Ask {name} to forget a remembered fact or everything. Examples: quên chuyện cà phê đi; quên hết."),
                 "none": "No fixed command was explicitly requested."
             }
         },

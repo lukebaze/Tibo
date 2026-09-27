@@ -75,6 +75,7 @@ fn run() -> Result<bool, String> {
                 status: case.active.then(|| "running".into()),
                 pending_confirmation: pending,
             },
+            recent: Vec::new(),
         };
         let started = Instant::now();
         let response = client

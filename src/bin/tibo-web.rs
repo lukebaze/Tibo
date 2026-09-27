@@ -479,7 +479,11 @@ fn execute_turn(turn: TurnRequest, state: &Arc<AppState>, writer: &EventWriter) 
                 }
             }
         } else if let Some(payload) = line.strip_prefix("TIBO_LLM_REQUEST ") {
-            llm_prompt = serde_json::from_str::<String>(payload).ok();
+            // {"prompt","context"}: context is Tibo's memory block, appended to the system prompt.
+            llm_prompt = serde_json::from_str::<Value>(payload).ok().and_then(|request| {
+                let prompt = request["prompt"].as_str()?.to_string();
+                Some((prompt, request["context"].as_str().unwrap_or_default().to_string()))
+            });
         }
         if state.cancelled.load(Ordering::Acquire) {
             break;
@@ -513,8 +517,8 @@ fn execute_turn(turn: TurnRequest, state: &Arc<AppState>, writer: &EventWriter) 
         writer.send(WebEvent::Done { exit_code });
         return;
     }
-    if let Some(prompt) = llm_prompt {
-        stream_claude(prompt, state, writer);
+    if let Some((prompt, context)) = llm_prompt {
+        stream_claude(prompt, &context, state, writer);
     } else {
         writer.send(WebEvent::State {
             state: "ready".into(),
@@ -524,7 +528,7 @@ fn execute_turn(turn: TurnRequest, state: &Arc<AppState>, writer: &EventWriter) 
     }
 }
 
-fn stream_claude(prompt: String, state: &Arc<AppState>, writer: &EventWriter) {
+fn stream_claude(prompt: String, context: &str, state: &Arc<AppState>, writer: &EventWriter) {
     writer.send(WebEvent::State {
         state: "thinking".into(),
         detail: "Streaming Claude response".into(),
@@ -532,6 +536,11 @@ fn stream_claude(prompt: String, state: &Arc<AppState>, writer: &EventWriter) {
     let claude = env::var_os("TIBO_CLAUDE")
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(".nvm/versions/node/v26.2.0/bin/claude"));
+    let mut system = system_prompt();
+    if !context.is_empty() {
+        system.push_str("\n\n");
+        system.push_str(context);
+    }
     let mut command = Command::new(claude);
     command.args([
         "-p",
@@ -546,7 +555,7 @@ fn stream_claude(prompt: String, state: &Arc<AppState>, writer: &EventWriter) {
         "--tools",
         "",
         "--system-prompt",
-        &system_prompt(),
+        &system,
     ]);
     let running = match start_process(&mut command, "claude", state, writer) {
         Ok(running) => running,
@@ -569,6 +578,7 @@ fn stream_claude(prompt: String, state: &Arc<AppState>, writer: &EventWriter) {
         pid,
     } = running;
     let mut received_text = false;
+    let mut answer = String::new();
     let mut final_sent = false;
     for line in stdout.lines() {
         let Ok(line) = line else { break };
@@ -589,6 +599,7 @@ fn stream_claude(prompt: String, state: &Arc<AppState>, writer: &EventWriter) {
                 .filter(|text| !text.is_empty())
             {
                 received_text = true;
+                answer.push_str(text);
                 writer.send(WebEvent::ResponseDelta { text: text.into() });
             }
         } else if object.get("type").and_then(Value::as_str) == Some("result") {
@@ -628,6 +639,7 @@ fn stream_claude(prompt: String, state: &Arc<AppState>, writer: &EventWriter) {
         if !final_sent {
             writer.send(WebEvent::ResponseDone);
         }
+        tibo::memory::log_turn(&prompt, &answer, "conversation");
         writer.send(WebEvent::State {
             state: "ready".into(),
             detail: "Turn complete".into(),

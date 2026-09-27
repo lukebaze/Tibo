@@ -1,7 +1,7 @@
 use tibo::{
     audio, handlers,
     jev::JevClient,
-    policy,
+    memory, policy,
     profile,
     questions::{self, Thresholds, Turn},
     session, tts,
@@ -40,6 +40,10 @@ struct Args {
     eval_run: bool,
     approve_run: bool,
     eval_run_id: Option<String>,
+    /// App-side turn log: `{"user","tibo","route"}` for chat/screen answers streamed by the app's agent.
+    log_turn: Option<String>,
+    /// Internal: detached daily memory consolidation spawned by `memory::maybe_consolidate`.
+    consolidate_memory: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -62,6 +66,16 @@ fn run() -> Result<(), String> {
     }
     if args.eval || args.eval_run {
         return legacy_eval(&args);
+    }
+    if let Some(json) = &args.log_turn {
+        let entry: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| format!("--log-turn: {e}"))?;
+        let field = |key: &str| entry[key].as_str().unwrap_or_default().to_string();
+        memory::log_turn(&field("user"), &field("tibo"), &field("route"));
+        return Ok(());
+    }
+    if let Some(day) = &args.consolidate_memory {
+        return memory::consolidate(day);
     }
     if let Some(wav) = &args.transcribe {
         audio::validate_wav(wav)?;
@@ -136,6 +150,13 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
     } else {
         session::load()
     };
+    let now = memory::Now::get();
+    let recent = if args.smoke {
+        Vec::new()
+    } else {
+        memory::maybe_consolidate(now);
+        memory::recent_turns(now)
+    };
     let turn = Turn {
         transcript,
         wake_matched,
@@ -146,6 +167,7 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
             .unwrap_or_else(|| "vi".into()),
         interrupted: args.interrupted,
         session: current_session.snapshot(),
+        recent: recent.iter().map(memory::format_turn).collect(),
     };
     println!("STAGE intent_start_ms={}", audio::elapsed_ms());
     let decision = if args.no_jev {
@@ -160,14 +182,25 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
     };
     println!("STAGE intent_done_ms={}", audio::elapsed_ms());
     if args.emit_text && matches!(decision, policy::Decision::Chat) {
-        return write_event("TIBO_LLM_REQUEST", &turn.transcript);
+        let payload =
+            serde_json::json!({ "prompt": turn.transcript, "context": memory::context(&recent) });
+        println!("TIBO_LLM_REQUEST {payload}");
+        return io::stdout().flush().map_err(|e| e.to_string());
     }
     if let (true, policy::Decision::ReadScreen { vision }) = (args.emit_text, &decision) {
-        let payload = serde_json::json!({ "question": turn.transcript, "vision": vision });
+        let payload = serde_json::json!({
+            "question": turn.transcript,
+            "vision": vision,
+            "context": memory::context(&recent),
+        });
         println!("TIBO_SCREEN_REQUEST {payload}");
         return io::stdout().flush().map_err(|e| e.to_string());
     }
+    let route = memory_route(&decision);
     let say = handlers::handle(decision, &mut current_session);
+    if let (Some(route), Some(text), false) = (route, say.as_deref(), args.smoke) {
+        memory::log_turn(&turn.transcript, text, route);
+    }
     if let Some(text) = say.filter(|text| !text.is_empty()) {
         if args.emit_text {
             write_event("TIBO_SAY", &text)?;
@@ -176,6 +209,28 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Turns the backend logs itself. Chat and screen answers are streamed by the app's agent, so the
+/// app logs those (`--log-turn`); ignored/incomplete/clarify turns carry nothing worth remembering.
+fn memory_route(decision: &policy::Decision) -> Option<&'static str> {
+    use policy::{Decision as D, PendingAction as P};
+    Some(match decision {
+        D::Closed { .. } => "closed_command",
+        D::Coding { .. } => "coding_task",
+        D::Session(_) => "session_control",
+        D::Memory(_) => "memory",
+        D::OpenApp { .. } => "computer_use",
+        D::NeedConfirm { pending, .. } => match pending {
+            P::Closed { .. } => "closed_command",
+            P::Coding { .. } => "coding_task",
+            P::ComputerUse { .. } => "computer_use",
+            P::ForgetMemory { .. } => "memory",
+        },
+        D::Ignore { .. } | D::Incomplete | D::Clarify { .. } | D::Chat | D::ReadScreen { .. } => {
+            return None
+        }
+    })
 }
 
 fn write_event(prefix: &str, text: &str) -> Result<(), String> {
@@ -205,6 +260,7 @@ fn route_test() -> Result<(), String> {
             asr_language: "vi".into(),
             interrupted: false,
             session: Default::default(),
+            recent: Vec::new(),
         };
         let answers = client
             .system_one(&questions::build_state(&turn), &questions::questions())
@@ -368,6 +424,10 @@ fn parse_args() -> Result<Args, String> {
             "--eval-run" => parsed.eval_run = true,
             "--approve-run" => parsed.approve_run = true,
             "--eval-run-id" => parsed.eval_run_id = Some(next(&mut args, "--eval-run-id")?),
+            "--log-turn" => parsed.log_turn = Some(next(&mut args, "--log-turn")?),
+            "--consolidate-memory" => {
+                parsed.consolidate_memory = Some(next(&mut args, "--consolidate-memory")?)
+            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }
