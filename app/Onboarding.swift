@@ -38,6 +38,12 @@ enum TiboWindows {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Dropping the window means the next open rebuilds the draft from the saved profile.
+    static func closeSettings() {
+        settingsWindow?.close()
+        settingsWindow = nil
+    }
+
     private static func makeWindow<Content: View>(title: String, root: Content) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
@@ -795,7 +801,6 @@ private struct SettingsRootView: View {
     @State private var draft: Profile
     @AppStorage("projectRoot") private var projectRoot = FileManager.default.homeDirectoryForCurrentUser.path
     @AppStorage("typesafeApiKey") private var typesafeApiKey = ""
-    @State private var saved = false
 
     init(store: ProfileStore) { _store = ObservedObject(wrappedValue: store); _draft = State(initialValue: store.profile) }
 
@@ -809,7 +814,7 @@ private struct SettingsRootView: View {
             ScrollView { detail.padding(28) }
         }
         .safeAreaInset(edge: .bottom) {
-            HStack { if saved { Text("Đã lưu").foregroundStyle(.secondary) }; Spacer(); Button("Lưu") { draft.onboarded = true; store.save(draft); saved = true }.buttonStyle(.borderedProminent) }.padding(.horizontal, 22).padding(.vertical, 14)
+            HStack { Spacer(); Button("Lưu") { draft.onboarded = true; store.save(draft); TiboWindows.closeSettings() }.buttonStyle(.borderedProminent) }.padding(.horizontal, 22).padding(.vertical, 14)
         }
         .frame(minWidth: 640, minHeight: 520)
     }
