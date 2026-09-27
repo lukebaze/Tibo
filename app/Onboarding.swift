@@ -78,9 +78,9 @@ private enum OnboardingPage: Int, CaseIterable, Identifiable {
         switch self {
         case .welcome: "Chào mừng"
         case .profile: "Hồ sơ"
-        case .assistant: "Trợ lý"
+        case .assistant: "Tên gọi"
         case .training: "Luyện giọng"
-        case .agent: "Trợ lý AI"
+        case .agent: "Bộ não AI"
         case .tts: "Giọng nói"
         case .stt: "Nhận dạng giọng nói"
         case .listen: "Cách nghe và nói"
@@ -88,6 +88,20 @@ private enum OnboardingPage: Int, CaseIterable, Identifiable {
         case .permissions: "Quyền truy cập"
         case .tryIt: "Thử ngay"
         case .finish: "Hoàn tất"
+        }
+    }
+    /// Settings sidebar icon.
+    var symbol: String {
+        switch self {
+        case .profile: "person.crop.circle"
+        case .assistant: "character.bubble"
+        case .training: "waveform"
+        case .agent: "brain"
+        case .tts: "speaker.wave.2"
+        case .stt: "mic"
+        case .listen: "ear"
+        case .notch: "rectangle.topthird.inset.filled"
+        default: "circle"
         }
     }
 }
@@ -162,7 +176,8 @@ private struct OnboardingView: View {
         switch page {
         case .welcome:
             VStack(spacing: 16) {
-                BuddyFace(mood: .happy, level: 0.7).frame(height: 150)
+                BuddyFace(mood: .happy, level: 0.7).frame(width: 260, height: 150)
+                    .background(.black).clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
                     .accessibilityElement().accessibilityLabel("Tibo vui vẻ")
                 Text("Xin chào! Mình là Tibo.").font(.title2.bold())
                 Text("Mình sẽ lắng nghe, giúp bạn làm việc và nói chuyện bằng tiếng Việt. Hãy dành một phút để cá nhân hóa Tibo.")
@@ -191,7 +206,7 @@ private struct OnboardingView: View {
             summaryRow("Trợ lý", draft.assistantName)
             summaryRow("Từ gọi", ([draft.assistantName] + draft.wakeWords).joined(separator: ", "))
             summaryRow("Từ vựng riêng", draft.vocabulary.isEmpty ? "Chưa có" : draft.vocabulary.map(\.word).joined(separator: ", "))
-            summaryRow("Trợ lý AI", draft.agent == .pi && !draft.agentModel.isEmpty ? "pi · \(draft.agentModel)" : draft.agent.title)
+            summaryRow("Bộ não AI", draft.agent == .pi && !draft.agentModel.isEmpty ? "pi · \(draft.agentModel)" : draft.agent.title)
             summaryRow("Giọng nói", TtsPageView.voiceLabel(draft))
             summaryRow("Nhận dạng", SttPageView.summary(draft) + (downloader.active == nil ? "" : " (đang tải \(Int(downloader.progress * 100))%)"))
             summaryRow("Microphone", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "Đã cấp quyền" : "Chưa cấp quyền")
@@ -238,8 +253,7 @@ private struct ProfilePageView: View {
     var body: some View {
         Form {
             Section("Tên của bạn") {
-                TextField("Ví dụ: Huy", text: $draft.userName)
-                    .textFieldStyle(.roundedBorder)
+                TextField("Tên", text: $draft.userName, prompt: Text("Ví dụ: Huy"))
                     .accessibilityLabel("Tên của bạn")
             }
         }.formStyle(.grouped)
@@ -251,14 +265,15 @@ private struct AssistantPageView: View {
     var body: some View {
         Form {
             Section("Tên trợ lý") {
-                TextField("Tibo", text: $draft.assistantName)
+                TextField("Tên", text: $draft.assistantName, prompt: Text("Tibo"))
                 Text("Nói “\(draft.assistantName.isEmpty ? "Tibo" : draft.assistantName) ơi …” để gọi")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Từ gọi thêm") {
                 ForEach(Array(draft.wakeWords.enumerated()), id: \.offset) { index, word in
                     HStack {
-                        TextField("Từ gọi", text: Binding(get: { draft.wakeWords[index] }, set: { draft.wakeWords[index] = $0 }))
+                        TextField("Từ gọi", text: Binding(get: { draft.wakeWords[index] }, set: { draft.wakeWords[index] = $0 }), prompt: Text("Ví dụ: Ti bô"))
+                            .labelsHidden()
                         Button { draft.wakeWords.remove(at: index) } label: { Image(systemName: "minus.circle") }
                             .buttonStyle(.borderless).accessibilityLabel("Xóa từ gọi \(word)")
                     }
@@ -302,6 +317,12 @@ private struct AgentPageView: View {
                 }
             }
         }.formStyle(.grouped)
+        // pi is the default brain; if it isn't installed here, don't leave an unusable choice selected.
+        .onAppear {
+            if AgentCLI.resolve(draft.agent) == nil, let installed = Profile.Agent.allCases.first(where: { AgentCLI.resolve($0) != nil }) {
+                draft.agent = installed
+            }
+        }
     }
 }
 
@@ -311,12 +332,15 @@ private struct TtsPageView: View {
 
     var body: some View {
         Form {
-            Section("Động cơ") {
+            Section("Động cơ đọc") {
                 Picker("Động cơ", selection: $draft.ttsEngine) {
-                    Text("Kokoro tiếng Việt (offline)").tag(Profile.TtsEngine.kokoro)
+                    Text(Self.kokoroVoices().contains(where: \.installed) ? "Kokoro tiếng Việt (offline)" : "Kokoro tiếng Việt (chưa cài trên máy này)")
+                        .tag(Profile.TtsEngine.kokoro)
+                        .disabled(!Self.kokoroVoices().contains(where: \.installed))
                     Text("Giọng hệ thống macOS").tag(Profile.TtsEngine.system)
                 }
                 .pickerStyle(.radioGroup)
+                .labelsHidden()
                 Picker("Giọng", selection: $draft.ttsVoice) {
                     if draft.ttsEngine == .kokoro {
                         ForEach(Self.kokoroVoices()) { voice in
@@ -341,6 +365,7 @@ private struct TtsPageView: View {
     }
 
     private func chooseValidVoice() {
+        if draft.ttsEngine == .kokoro && !Self.kokoroVoices().contains(where: \.installed) { draft.ttsEngine = .system }
         let valid = draft.ttsEngine == .kokoro ? Self.kokoroVoices().filter(\.installed).map(\.id) : Self.systemVoices()
         if !valid.contains(draft.ttsVoice), let first = valid.first { draft.ttsVoice = first }
     }
@@ -386,7 +411,7 @@ private struct SttPageView: View {
                     ForEach(Profile.SttEngine.allCases) { engine in
                         Text(Self.title(engine)).tag(engine).disabled(engine == .vietasr && !Self.vietASRAvailable)
                     }
-                }.pickerStyle(.radioGroup)
+                }.pickerStyle(.radioGroup).labelsHidden()
             }
             if draft.sttEngine == .whisper {
                 Section("Mô hình Whisper") {
@@ -708,7 +733,9 @@ private struct TryItPageView: View {
             check(hovered, "Đưa chuột lên notch ở đỉnh màn hình")
             check(woke, draft.voiceMode == .wake ? "Nói “\(draft.assistantName)” kèm một câu, ví dụ “\(draft.assistantName) ơi, mấy giờ rồi”" : "Bấm nút mic trên notch rồi nói một câu")
             BuddyFace(mood: woke ? .happy : hovered ? .surprised : .idle, level: 0.5)
-                .frame(height: 120).frame(maxWidth: .infinity)
+                .frame(width: 208, height: 120)
+                .background(.black).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .frame(maxWidth: .infinity)
                 .accessibilityHidden(true)
             if hovered && !woke { Text("Phần giọng nói có thể bỏ qua nếu bạn đang ở chỗ ồn.").font(.caption).foregroundStyle(.secondary) }
         }
@@ -825,7 +852,17 @@ private struct RecognitionPair { let backend: String; let apple: String }
 
 private struct PermissionRow: View {
     let title: String; let status: String; let action: () -> Void
-    var body: some View { HStack { VStack(alignment: .leading) { Text(title); Text(status).font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("Yêu cầu quyền", action: action).disabled(status == "Đã cấp") } }
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading) { Text(title); Text(status).font(.caption).foregroundStyle(.secondary) }
+            Spacer()
+            if status == "Đã cấp" {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Đã cấp")
+            } else {
+                Button("Yêu cầu quyền", action: action)
+            }
+        }
+    }
 }
 
 private struct SettingsRootView: View {
@@ -840,9 +877,13 @@ private struct SettingsRootView: View {
     var body: some View {
         HStack(spacing: 0) {
             List(selection: $selection) {
-                ForEach([OnboardingPage.profile, .assistant, .training, .agent, .tts, .stt, .listen, .notch], id: \.self) { page in Text(page.title).tag(Optional(page)) }
-                Text("Nâng cao").tag(Optional<OnboardingPage>.none)
-            }.frame(width: 180)
+                ForEach([OnboardingPage.profile, .assistant, .training, .agent, .tts, .stt, .listen, .notch], id: \.self) { page in
+                    Label(page.title, systemImage: page.symbol).tag(Optional(page))
+                }
+                Label("Nâng cao", systemImage: "gearshape.2").tag(Optional<OnboardingPage>.none)
+            }
+            .listStyle(.sidebar)
+            .frame(width: 190)
             Divider()
             ScrollView { detail.padding(28) }
         }
