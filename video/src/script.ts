@@ -1,17 +1,17 @@
-// Narration per scene. `npm run voice` turns each line into public/vo/<id>.wav (macOS voice "Linh")
+// Narration per scene. `npm run voice` turns each line into public/vo/<id>.wav (Kokoro, voice af_heart)
 // and writes the measured lengths to src/durations.json, which sets every scene's length.
 export const SCRIPT = [
-	{id: 'intro', text: 'Xin chào, mình là Tibo. Trợ lý giọng nói sống ngay trên notch của Mac.'},
-	{id: 'voice', text: 'Chỉ cần gọi Tibo. Tibo biết khi nào bạn nói xong, và bạn có thể ngắt lời bất cứ lúc nào.'},
-	{id: 'notch', text: 'Rê chuột lên notch để mở. Gõ câu hỏi, hoặc gõ dấu gạch chéo để dùng lệnh nhanh.'},
-	{id: 'apps', text: 'Mở ứng dụng tức thì, không cần chờ.'},
-	{id: 'agents', text: 'Giao việc lập trình cho pi, omp, Claude Code hay Codex. Tibo hỏi bạn trước khi chạy, rồi báo lại kết quả.'},
-	{id: 'screen', text: 'Hỏi về màn hình: lỗi này nghĩa là gì, tóm tắt trang này. Tibo đọc chữ, và nhìn cả hình khi cần.'},
-	{id: 'control', text: 'Tibo điều khiển máy tính thay bạn, và luôn xin phép trước khi bấm.'},
-	{id: 'local', text: 'Nhận giọng nói chạy ngay trên máy, hiểu lệnh trong chưa tới nửa giây.'},
-	{id: 'onboarding', text: 'Cài đặt trong vài bước: chọn model, micro, giọng đọc và vị trí notch.'},
-	{id: 'recap', text: 'Tóm lại, Tibo nghe, hiểu, nhìn, và làm việc cùng bạn.'},
-	{id: 'outro', text: 'Tibo ơi, bắt đầu thôi!'},
+	{id: 'intro', text: "Hi, I'm Tibo. A voice assistant that lives right in your Mac's notch."},
+	{id: 'voice', text: 'Just say Tibo. I know when you have finished talking, and you can interrupt me any time.'},
+	{id: 'notch', text: 'Hover the notch to open it. Type a question, or type a slash for quick commands.'},
+	{id: 'apps', text: 'Open any app, instantly.'},
+	{id: 'agents', text: 'Hand coding work to pi, omp, Claude Code or Codex. I ask before running, then report back.'},
+	{id: 'screen', text: 'Ask about your screen. What does this error mean? Summarize this page. I read the text, and look at the picture when needed.'},
+	{id: 'control', text: 'I can click and type for you, and I always ask first.'},
+	{id: 'local', text: 'Speech recognition runs on your Mac, and I understand commands in under half a second.'},
+	{id: 'onboarding', text: 'Setup takes a few steps: model, microphone, voice, and notch position.'},
+	{id: 'recap', text: 'So: Tibo listens, understands, sees, and gets work done with you.'},
+	{id: 'outro', text: "Hey Tibo, let's get started!"},
 ] as const;
 
 export type SceneId = (typeof SCRIPT)[number]['id'];

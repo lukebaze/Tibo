@@ -1,13 +1,13 @@
 {
- "intro": 5.517688,
- "voice": 7.092792,
- "notch": 5.973521,
- "apps": 2.687625,
- "agents": 8.307125,
- "screen": 7.670042,
- "control": 4.470125,
- "local": 4.417688,
- "onboarding": 5.524042,
- "recap": 4.458521,
- "outro": 1.939146
+ "intro": 4.16,
+ "voice": 4.587,
+ "notch": 4.757,
+ "apps": 1.579,
+ "agents": 6.101,
+ "screen": 6.827,
+ "control": 2.965,
+ "local": 5.099,
+ "onboarding": 4.48,
+ "recap": 4.117,
+ "outro": 1.899
 }
