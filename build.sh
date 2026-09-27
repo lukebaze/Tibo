@@ -10,7 +10,10 @@ cp build/TiboApp Tibo.app/Contents/MacOS/
 cp target/release/tibo target/release/tibo-bench app/Tibo.icns Tibo.app/Contents/Resources/
 cp -R app/taby Tibo.app/Contents/Resources/
 cp app/Tibo-Info.plist Tibo.app/Contents/Info.plist
-codesign --force --deep --sign - Tibo.app
+# A real certificate keeps the designated requirement stable across rebuilds, so macOS remembers the
+# microphone/speech grants from onboarding. Ad-hoc ("-") changes identity every build and re-prompts.
+SIGN_ID="${TIBO_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+codesign --force --deep --sign "${SIGN_ID:--}" Tibo.app
 mkdir -p dist && hdiutil create -volname Tibo -srcfolder Tibo.app -ov -format UDZO dist/Tibo.dmg
 rm -rf "$HOME/Applications/Tibo.app"
 cp -R Tibo.app "$HOME/Applications/"
