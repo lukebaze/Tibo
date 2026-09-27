@@ -1,50 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- Tibo app icon: the notch buddy (original drawing, not Taby artwork). Regenerate Tibo.icns: for s in 16 32 128 256 512; do rsvg-convert -w $s icon.svg -o Tibo.iconset/icon_${s}x${s}.png; rsvg-convert -w $((s*2)) icon.svg -o Tibo.iconset/icon_${s}x${s}@2x.png; done; iconutil -c icns i -o Tibo.icns -->
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#23253a"/>
-      <stop offset="1" stop-color="#0b0c14"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="1" r="0.75">
-      <stop offset="0" stop-color="#ff9f43" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#ff9f43" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#16171f"/>
-      <stop offset="1" stop-color="#000"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000" flood-opacity="0.45"/>
-    </filter>
-    <clipPath id="squircle"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
-  </defs>
-
-  <g filter="url(#shadow)">
-    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
-  </g>
-  <g clip-path="url(#squircle)">
-    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
-    <!-- The notch: black tab flush with the top edge, the buddy peeks out of it. -->
-    <path d="M232 100 H792 V420 a120 120 0 0 1 -120 120 H352 a120 120 0 0 1 -120 -120 Z" fill="url(#face)"/>
-  </g>
-
-  <!-- Eyes: tall soft rounded blocks, slightly squashed like a blink-in-progress. -->
-  <rect x="342" y="236" width="118" height="190" rx="59" fill="#fff"/>
-  <rect x="564" y="236" width="118" height="190" rx="59" fill="#fff"/>
-  <!-- Smile -->
-  <path d="M462 468 Q512 512 562 468" fill="none" stroke="#fff" stroke-width="22" stroke-linecap="round"/>
-  <!-- Blush -->
-  <ellipse cx="318" cy="470" rx="34" ry="16" fill="#ff9f43" opacity="0.85"/>
-  <ellipse cx="706" cy="470" rx="34" ry="16" fill="#ff9f43" opacity="0.85"/>
-
-  <!-- Voice bars under the notch, the "listening" cue. -->
-  <g fill="#ff9f43">
-    <rect x="387" y="664" width="34" height="96" rx="17" opacity="0.8"/>
-    <rect x="445" y="628" width="34" height="168" rx="17"/>
-    <rect x="503" y="600" width="34" height="224" rx="17" fill="#ffb86b"/>
-    <rect x="561" y="628" width="34" height="168" rx="17"/>
-    <rect x="619" y="664" width="34" height="96" rx="17" opacity="0.8"/>
-  </g>
-  <!-- Sparkle -->
-  <path d="M786 604 l12 34 34 12 -34 12 -12 34 -12 -34 -34 -12 34 -12 Z" fill="#ffd28a"/>
+<!-- Tibo app icon: the notch buddy (original drawing, not Taby artwork). Regenerate Tibo.icns: for s in 16 32 128 256 512; do rsvg-convert -w $s icon.svg -o Tibo.iconset/icon_${s}x${s}.png; rsvg-convert -w $((s*2)) icon.svg -o Tibo.iconset/icon_${s}x${s}@2x.png; done; iconutil -c icns i -o Tibo.icns -->
+<defs>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+<feDropShadow dx="0" dy="18" stdDeviation="22" flood-opacity="0.4"/>
+</filter>
+<linearGradient id="o" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0" stop-color="#ffb35c"/>
+<stop offset="1" stop-color="#ff6a3d"/>
+</linearGradient>
+<clipPath id="c">
+<rect x="100" y="100" width="824" height="824" rx="185"/>
+</clipPath>
+</defs>
+<g filter="url(#sh)">
+<rect x="100" y="100" width="824" height="824" rx="185" fill="url(#o)"/>
+</g>
+<g clip-path="url(#c)">
+<path d="M180 100 H844 V560 a170 170 0 0 1 -170 170 H350 a170 170 0 0 1 -170 -170 Z" fill="#0b0c14"/>
+</g>
+<rect x="282.5" y="271.75" width="159.3" height="256.5" rx="79.65" fill="#fff"/>
+<rect x="582.2" y="271.75" width="159.3" height="256.5" rx="79.65" fill="#fff"/>
+<path d="M444.5 584.95 Q512 644.35 579.5 584.95" fill="none" stroke="#fff" stroke-width="29.700000000000003" stroke-linecap="round"/>
+<ellipse cx="259.54999999999995" cy="584.95" rx="45.900000000000006" ry="21.6" fill="#ff9f43" opacity="0.9"/>
+<ellipse cx="764.45" cy="584.95" rx="45.900000000000006" ry="21.6" fill="#ff9f43" opacity="0.9"/>
+<path d="M800 778.6 l10.8 30.6 30.6 10.8 -30.6 10.8 -10.8 30.6 -10.8 -30.6 -30.6 -10.8 30.6 -10.8 Z" fill="#fff"/>
 </svg>
