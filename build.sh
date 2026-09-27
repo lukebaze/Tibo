@@ -8,6 +8,7 @@ rm -rf Tibo.app
 mkdir -p Tibo.app/Contents/MacOS Tibo.app/Contents/Resources
 cp build/TiboApp Tibo.app/Contents/MacOS/
 cp target/release/tibo target/release/tibo-bench app/Tibo.icns Tibo.app/Contents/Resources/
+cp -R app/taby Tibo.app/Contents/Resources/
 cp app/Tibo-Info.plist Tibo.app/Contents/Info.plist
 codesign --force --deep --sign - Tibo.app
 rm -rf "$HOME/Applications/Tibo.app"

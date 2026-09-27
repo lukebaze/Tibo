@@ -1157,7 +1157,7 @@ private struct ContentView: View {
             if old == .speaking && new != .speaking { react(.happy, for: 2.2) }
         }
         .onChange(of: notch.expanded) { _, expanded in
-            if expanded && voice.state == .listening { react(.surprised, for: 0.8) }
+            if expanded && voice.state == .listening { react(.surprised, for: 2.6) }
         }
     }
 
@@ -1237,321 +1237,126 @@ private struct ContentView: View {
     }
 }
 
-/// Taby-style mascot: white squircle eyes and a thin mouth. Every frame blends toward the
-/// current mood's pose, then layers idle antics (glances, tilts, winks, hearts, yawns) and blinks.
-private struct BuddyFace: View {
+/// Taby's face from the firmware-taby 1.64 pack (TRIIIS-LABS/firmware-taby@3681c7f, bundled in
+/// Resources/taby). The artwork stays Taby's under the Taby Artwork Terms in Resources/taby/LICENSE.
+struct BuddyFace: View {
     enum Mood: Equatable { case idle, thinking, talking, asking, sleeping, happy, surprised }
     let mood: Mood
     let level: CGFloat
-    @State private var animator = FaceAnimator()
+    @State private var player = FacePlayer()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
+        TimelineView(.animation(minimumInterval: 1 / 20)) { context in
             Canvas { ctx, size in
-                let pose = animator.pose(mood: mood, level: level, at: t)
-                FaceRenderer.draw(pose, mood: mood, extras: animator.extrasAlpha(at: t), in: &ctx, size: size, t: t)
+                guard let frame = player.frame(mood: mood, level: level, at: context.date.timeIntervalSinceReferenceDate) else { return }
+                // Frames are 280×456 with the face turned clockwise for the portrait panel: turn it back, aspect-fit.
+                let scale = min(size.width / CGFloat(frame.height), size.height / CGFloat(frame.width))
+                let w = CGFloat(frame.width) * scale, h = CGFloat(frame.height) * scale
+                ctx.translateBy(x: size.width / 2, y: size.height / 2)
+                ctx.rotate(by: .degrees(-90))
+                ctx.draw(Image(decorative: frame, scale: 1), in: CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
             }
         }
     }
 }
 
-private struct FacePose {
-    var lookX: CGFloat = 0, lookY: CGFloat = 0, tilt: CGFloat = 0, lift: CGFloat = 0, squash: CGFloat = 0
-    var eyeL: CGFloat = 1, eyeR: CGFloat = 1, openL: CGFloat = 1, openR: CGFloat = 1
-    var arcsL: CGFloat = 0, arcsR: CGFloat = 0, hearts: CGFloat = 0
-    var mouthCurve: CGFloat = 0.6, mouthWidth: CGFloat = 1, mouthOpen: CGFloat = 0, tongue: CGFloat = 0
-    var brows: CGFloat = 0, browRaise: CGFloat = 0, browTilt: CGFloat = 0, blush: CGFloat = 0
-
-    private static let fields: [WritableKeyPath<FacePose, CGFloat>] = [
-        \.lookX, \.lookY, \.tilt, \.lift, \.squash, \.eyeL, \.eyeR, \.openL, \.openR, \.arcsL, \.arcsR, \.hearts,
-        \.mouthCurve, \.mouthWidth, \.mouthOpen, \.tongue, \.brows, \.browRaise, \.browTilt, \.blush,
+/// Picks the clip sequence for a mood and plays it: intros once, a trailing `_loop` clip loops,
+/// any other trailing clip holds its last frame. Idle turns attentive while the mic hears a voice
+/// and now and then plays an ambient antic.
+private final class FacePlayer {
+    private static let tracks: [BuddyFace.Mood: [String]] = [
+        .idle: ["idle_01_loop"],
+        .thinking: ["claude_in", "claude_loop"],
+        .talking: ["talking_default_loop"],
+        .asking: ["taby_response_ready_in", "taby_response_ready_loop"],
+        .sleeping: ["sleeping_loop"],
+        .happy: ["confirmation"],
+        .surprised: ["wow"],
     ]
-
-    func mixed(_ other: FacePose, _ k: CGFloat) -> FacePose {
-        var result = self
-        for field in Self.fields { result[keyPath: field] += (other[keyPath: field] - self[keyPath: field]) * k }
-        return result
-    }
-
-    static func target(_ mood: BuddyFace.Mood, t: Double, level: CGFloat) -> FacePose {
-        let s = { (f: Double) in CGFloat(sin(t * f)) }
-        var p = FacePose()
-        p.squash = s(1.7) * 0.025
-        switch mood {
-        case .idle:
-            let (action, weight, local) = IdleAction.current(t)
-            p = p.mixed(action.pose(p, local: local), weight)
-            // leans in while hearing a voice: bigger eyes, raised brows, small "o"
-            let hear = min(1, max(0, (level - 0.35) / 0.35))
-            p.eyeL += hear * 0.18
-            p.eyeR += hear * 0.18
-            p.brows = max(p.brows, hear)
-            p.browRaise += hear * 0.5
-            p.mouthOpen = max(p.mouthOpen, hear * 0.3)
-            p.mouthCurve -= hear * 0.3
-            p.mouthWidth -= hear * 0.3
-        case .thinking:
-            p.lookX = 0.55 + s(1.9) * 0.2
-            p.lookY = -0.7
-            p.tilt = 0.07
-            p.eyeL = 0.92; p.eyeR = 1.05; p.openL = 0.8; p.openR = 0.85
-            p.brows = 1; p.browRaise = 0.2; p.browTilt = -0.6
-            p.mouthCurve = -0.15; p.mouthWidth = 0.55
-        case .talking:
-            let beat = abs(s(9.5)) * (0.6 + 0.4 * abs(s(2.3)))
-            p.mouthOpen = 0.2 + 0.7 * beat; p.mouthCurve = 0.7; p.mouthWidth = 0.9; p.tongue = 0.8
-            p.brows = 0.7; p.browRaise = 0.2 + 0.3 * abs(s(2.3))
-            p.lookX = s(0.9) * 0.25; p.tilt = s(1.3) * 0.05; p.lift = s(4.7) * 0.02
-        case .asking:
-            p.tilt = 0.2; p.eyeL = 1.15; p.eyeR = 0.85
-            p.brows = 1; p.browTilt = 0.7; p.browRaise = 0.3
-            p.mouthCurve = -0.1; p.mouthWidth = 0.5; p.lookX = 0.2; p.lookY = -0.2
-        case .sleeping:
-            p.openL = 0; p.openR = 0; p.lookY = 0.4; p.tilt = -0.08 + s(0.8) * 0.03
-            p.mouthCurve = 0.2; p.mouthWidth = 0.45; p.mouthOpen = 0.12 + 0.08 * s(1.2)
-            p.squash = s(1.2) * 0.05; p.lift = 0.05
-        case .happy:
-            p.arcsL = 1; p.arcsR = 1; p.blush = 1
-            p.mouthOpen = 0.75; p.mouthCurve = 1; p.tongue = 1
-            p.brows = 0.8; p.browRaise = 0.5
-            p.lift = -abs(s(7)) * 0.06; p.tilt = s(3.5) * 0.06
-        case .surprised:
-            p.eyeL = 1.3; p.eyeR = 1.3; p.brows = 1; p.browRaise = 1
-            p.mouthOpen = 0.6; p.mouthWidth = 0.45; p.mouthCurve = 0; p.lift = -0.04
-        }
-        return p
-    }
-}
-
-private enum IdleAction {
-    case none, glanceLeft, glanceRight, lookUp, tiltLeft, tiltRight, content, wink, tongue, love, yawn, lookAround, curious
-
-    static let period = 4.5
-    private static let pool: [IdleAction] = [
-        .none, .glanceLeft, .glanceRight, .none, .lookUp, .tiltLeft, .tiltRight, .content,
-        .wink, .tongue, .glanceLeft, .glanceRight, .love, .yawn, .lookAround, .curious,
+    private static let antics = [
+        "idle_02_loop", "idle_variation_loop", "blush", "stretching", "drink_water", "posture_check",
+        "flower_grow", "fishing_short", "fishing_long", "basketball_throw", "basketball_dunk", "boxing",
+        "love_01", "relaxing_01_loop", "listening_music_loop", "f1_car", "yeah", "thumbs_up",
     ]
+    private var track: [String] = []
+    private var startedAt = 0.0
+    private var heardAt = -Double.infinity
+    private var antic: (id: String, until: Double)?
+    private var nextAnticAt: Double?
 
-    /// Deterministic "random" antic per 4.5 s slot, eased in and out inside the slot.
-    static func current(_ t: Double) -> (IdleAction, CGFloat, Double) {
-        let slot = Int((t / period).rounded(.down))
-        let local = t - Double(slot) * period
-        let action = pool[Int(hash(slot) % UInt64(pool.count))]
-        let weight = smoothstep(local, 1.0, 1.35) * (1 - smoothstep(local, 3.1, 3.5))
-        return (action, weight, local)
-    }
-
-    static func hash(_ n: Int) -> UInt64 {
-        var z = UInt64(bitPattern: Int64(n)) &+ 0x9E37_79B9_7F4A_7C15
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-
-    static func smoothstep(_ x: Double, _ a: Double, _ b: Double) -> CGFloat {
-        let k = min(1, max(0, (x - a) / (b - a)))
-        return CGFloat(k * k * (3 - 2 * k))
-    }
-
-    func pose(_ base: FacePose, local: Double) -> FacePose {
-        var p = base
-        switch self {
-        case .none: break
-        case .glanceLeft: p.lookX = -1
-        case .glanceRight: p.lookX = 1
-        case .lookUp: p.lookY = -1; p.brows = 0.6; p.browRaise = 0.4
-        case .tiltLeft: p.tilt = -0.16; p.lookX = -0.3; p.mouthCurve = 0.8
-        case .tiltRight: p.tilt = 0.16; p.lookX = 0.3; p.mouthCurve = 0.8
-        case .content: p.arcsL = 1; p.arcsR = 1; p.blush = 0.7; p.mouthCurve = 1
-        case .wink: p.arcsR = 1; p.tilt = 0.08; p.mouthOpen = 0.2; p.tongue = 1; p.mouthCurve = 0.9; p.brows = 0.6
-        case .tongue: p.mouthOpen = 0.25; p.tongue = 1; p.mouthCurve = 0.8; p.lookX = -0.2
-        case .love: p.hearts = 1; p.blush = 1; p.mouthCurve = 1; p.mouthOpen = 0.3; p.lift = -0.03
-        case .yawn: p.openL = 0.15; p.openR = 0.15; p.mouthOpen = 1; p.mouthWidth = 0.6; p.mouthCurve = 0; p.tilt = -0.06; p.lift = -0.03
-        case .lookAround: p.lookX = CGFloat(sin((local - 1) * 3)); p.lookY = -0.2
-        case .curious: p.eyeL = 1.2; p.eyeR = 0.9; p.tilt = -0.12; p.brows = 1; p.browTilt = 0.5
+    func frame(mood: BuddyFace.Mood, level: CGFloat, at t: Double) -> CGImage? {
+        let next = pick(mood: mood, level: level, at: t)
+        if next != track { track = next; startedAt = t }
+        var elapsed = t - startedAt
+        for (index, id) in track.enumerated() {
+            guard let clip = FaceClip.named(id) else { return nil }
+            if index < track.count - 1 {
+                if elapsed < clip.duration { return clip.frame(at: elapsed) }
+                elapsed -= clip.duration
+            } else {
+                return clip.frame(at: id.hasSuffix("_loop") ? elapsed.truncatingRemainder(dividingBy: clip.duration) : elapsed)
+            }
         }
-        return p
+        return nil
+    }
+
+    private func pick(mood: BuddyFace.Mood, level: CGFloat, at t: Double) -> [String] {
+        if mood == .idle && level > 0.5 { heardAt = t }
+        guard mood == .idle, t - heardAt > 1.5 else {
+            antic = nil
+            nextAnticAt = nil
+            return mood == .idle ? ["listening_in", "listening_loop"] : Self.tracks[mood, default: []]
+        }
+        if let antic, t < antic.until { return [antic.id] }
+        antic = nil
+        guard let due = nextAnticAt else {
+            nextAnticAt = t + .random(in: 45...120)
+            return ["idle_01_loop"]
+        }
+        if t >= due, let id = Self.antics.randomElement(), let clip = FaceClip.named(id) {
+            antic = (id, t + clip.duration)
+            nextAnticAt = nil
+            return [id]
+        }
+        return ["idle_01_loop"]
     }
 }
 
-/// Per-face animation memory: remembers the last drawn pose so mood switches glide instead of snap.
-private final class FaceAnimator {
-    private var mood: BuddyFace.Mood?
-    private var from = FacePose()
-    private var last = FacePose()
-    private var changedAt = 0.0
-    private var level: CGFloat = 0
+/// One bundled GIF, decoded a frame at a time: a fully decoded idle loop would be ~90 MB.
+private final class FaceClip {
+    private static var cache: [String: FaceClip] = [:]
+    let duration: Double
+    private let source: CGImageSource
+    private let ends: [Double]
 
-    func pose(mood: BuddyFace.Mood, level target: CGFloat, at t: Double) -> FacePose {
-        level += (target - level) * 0.15
-        if mood != self.mood {
-            from = last
-            changedAt = self.mood == nil ? t - 1 : t
-            self.mood = mood
-        }
-        last = from.mixed(FacePose.target(mood, t: t, level: level), extrasAlpha(at: t))
-        var shown = last
-        let blink = Self.blink(t)
-        shown.openL *= blink
-        shown.openR *= blink
-        return shown
+    private init(source: CGImageSource, ends: [Double]) {
+        self.source = source
+        self.ends = ends
+        duration = ends.last ?? 0
     }
 
-    func extrasAlpha(at t: Double) -> CGFloat { IdleAction.smoothstep(t - changedAt, 0, 0.3) }
-
-    private static func blink(_ t: Double) -> CGFloat {
-        let period = 2.9
-        let slot = Int((t / period).rounded(.down))
-        guard IdleAction.hash(slot &+ 7919) % 3 != 0 else { return 1 }
-        let phase = t - Double(slot) * period - 0.4
-        guard phase >= 0, phase < 0.18 else { return 1 }
-        return CGFloat(abs(phase - 0.09) / 0.09)
-    }
-}
-
-private enum FaceRenderer {
-    static let ink = Color(red: 0.97, green: 0.97, blue: 0.96)
-    static let blush = Color(red: 1, green: 0.6, blue: 0.68)
-    static let tongue = Color(red: 0.95, green: 0.5, blue: 0.45)
-
-    static func draw(_ p: FacePose, mood: BuddyFace.Mood, extras: CGFloat, in ctx: inout GraphicsContext, size: CGSize, t: Double) {
-        let unit = min(size.height * 0.8, size.width / 1.9)
-        let eyeH = unit * 0.46, eyeW = eyeH * 0.64, spread = unit * 0.5
-        let line = max(1.2, unit * 0.045)
-        let ink = GraphicsContext.Shading.color(Self.ink)
-        let center = CGPoint(x: size.width / 2, y: size.height * 0.52 + p.lift * unit)
-        var face = ctx
-        face.translateBy(x: center.x, y: center.y)
-        face.rotate(by: .radians(Double(p.tilt)))
-        face.scaleBy(x: 1 - p.squash, y: 1 + p.squash)
-
-        let eyeDX = p.lookX * unit * 0.14, eyeDY = p.lookY * unit * 0.09
-        for (side, scale, open, arc) in [(CGFloat(-1), p.eyeL, p.openL, p.arcsL), (1, p.eyeR, p.openR, p.arcsR)] {
-            let x = side * spread + eyeDX, y = eyeDY
-            let w = eyeW * scale, fullH = eyeH * scale
-            let solid = (1 - arc) * (1 - p.hearts)
-            if solid > 0.01 {
-                var e = face
-                e.opacity = solid
-                let h = max(fullH * 0.09, fullH * open)
-                e.fill(Path(roundedRect: CGRect(x: x - w / 2, y: y - h / 2, width: w, height: h), cornerRadius: min(w, h) * 0.45, style: .continuous), with: ink)
-            }
-            if arc > 0.01 {
-                var e = face
-                e.opacity = arc
-                var a = Path()
-                a.move(to: CGPoint(x: x - w * 0.62, y: y + fullH * 0.08))
-                a.addQuadCurve(to: CGPoint(x: x + w * 0.62, y: y + fullH * 0.08), control: CGPoint(x: x, y: y - fullH * 0.42))
-                e.stroke(a, with: ink, style: StrokeStyle(lineWidth: line * 1.5, lineCap: .round))
-            }
-            if p.hearts > 0.01 {
-                var e = face
-                e.opacity = p.hearts
-                e.fill(heart(CGPoint(x: x, y: y), w * 1.3 * (1 + 0.08 * CGFloat(sin(t * 8)))), with: .color(Self.blush))
-            }
-            if p.brows > 0.01 {
-                var b = face
-                b.opacity = min(1, p.brows * 1.6)
-                let by = y - fullH * 0.72 - p.browRaise * fullH * 0.18 + side * p.browTilt * fullH * 0.12
-                var brow = Path()
-                brow.move(to: CGPoint(x: x - w * 0.5, y: by + fullH * 0.05))
-                brow.addQuadCurve(to: CGPoint(x: x + w * 0.5, y: by + fullH * 0.05), control: CGPoint(x: x, y: by - fullH * 0.12))
-                b.stroke(brow, with: ink, style: StrokeStyle(lineWidth: line * 1.4, lineCap: .round))
-            }
-            if p.blush > 0.01 {
-                var b = face
-                b.opacity = p.blush * 0.85
-                b.fill(Path(ellipseIn: CGRect(x: x + side * w * 0.35 - w * 0.55, y: y + fullH * 0.42, width: w * 1.1, height: fullH * 0.2)), with: .color(Self.blush))
-            }
+    static func named(_ id: String) -> FaceClip? {
+        if let clip = cache[id] { return clip }
+        guard let url = Bundle.main.url(forResource: id, withExtension: "gif", subdirectory: "taby"),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetCount(source) > 0 else {
+            print("TIBO_UI face_clip_missing id=\(id)")
+            return nil
         }
-
-        let mx = p.lookX * unit * 0.08, my = eyeH * 0.42 + p.lookY * unit * 0.04
-        let mw = unit * 0.4 * p.mouthWidth
-        let left = CGPoint(x: mx - mw / 2, y: my), right = CGPoint(x: mx + mw / 2, y: my)
-        if p.mouthOpen < 0.06 {
-            var m = Path()
-            m.move(to: left)
-            m.addQuadCurve(to: right, control: CGPoint(x: mx, y: my + p.mouthCurve * unit * 0.14))
-            face.stroke(m, with: ink, style: StrokeStyle(lineWidth: line, lineCap: .round))
-        } else {
-            let open = p.mouthOpen * unit * 0.4
-            var m = Path()
-            m.move(to: left)
-            m.addQuadCurve(to: right, control: CGPoint(x: mx, y: my + p.mouthCurve * unit * 0.03 - open * (1 - p.mouthCurve) * 0.5))
-            m.addQuadCurve(to: left, control: CGPoint(x: mx, y: my + p.mouthCurve * unit * 0.12 + open))
-            m.closeSubpath()
-            face.fill(m, with: .color(Color(white: 0.08)))
-            if p.tongue > 0.01 {
-                var tg = face
-                tg.clip(to: m)
-                tg.opacity = p.tongue
-                let depth = (p.mouthCurve * unit * 0.12 + open) / 2 // quad-curve apex sits halfway to its control point
-                tg.fill(Path(ellipseIn: CGRect(x: mx - mw * 0.28, y: my + depth * 0.3, width: mw * 0.56, height: depth * 1.2)), with: .color(Self.tongue))
-            }
-            face.stroke(m, with: ink, style: StrokeStyle(lineWidth: line, lineCap: .round, lineJoin: .round))
+        var t = 0.0
+        let ends = (0..<CGImageSourceGetCount(source)).map { index -> Double in
+            let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            let gif = props?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+            let delay = gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double ?? 0
+            t += delay > 0.01 ? delay : 0.05
+            return t
         }
-
-        // Floating glyphs only on the big face; unreadable at pill size.
-        guard unit >= 30, extras > 0.01 else { return }
-        let corner = CGPoint(x: center.x + spread + eyeW * 1.3, y: center.y - eyeH * 0.7)
-        func glyph(_ s: String, _ at: CGPoint, _ scale: CGFloat, alpha: CGFloat = 1) {
-            var g = ctx
-            g.opacity = extras * alpha
-            g.draw(Text(s).font(.system(size: unit * scale, weight: .heavy, design: .rounded)).foregroundColor(Self.ink), at: at)
-        }
-        switch mood {
-        case .thinking:
-            for i in 0..<3 {
-                let r = unit * (0.03 + 0.02 * CGFloat(i))
-                let c = CGPoint(x: corner.x - unit * 0.1 + CGFloat(i) * unit * 0.1, y: corner.y + unit * 0.1 - CGFloat(i) * unit * 0.12)
-                var d = ctx
-                d.opacity = extras * (0.35 + 0.65 * (0.5 + 0.5 * sin(t * 4 - Double(i))))
-                d.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)), with: ink)
-            }
-        case .asking:
-            glyph("?", CGPoint(x: corner.x, y: corner.y + CGFloat(sin(t * 5)) * unit * 0.04), 0.34)
-        case .surprised:
-            glyph("!", corner, 0.36)
-        case .sleeping:
-            for i in 0..<3 {
-                let ph = (t * 0.6 + Double(i) / 3).truncatingRemainder(dividingBy: 1)
-                let pt = CGPoint(x: corner.x - unit * 0.1 + CGFloat(ph) * unit * 0.25, y: corner.y + unit * 0.3 - CGFloat(ph) * unit * 0.45)
-                glyph("z", pt, 0.14 + 0.14 * CGFloat(ph), alpha: CGFloat(sin(ph * .pi)))
-            }
-        case .happy:
-            let spots: [(CGFloat, CGFloat)] = [(-1.35, -0.55), (1.3, -0.6), (-1.1, 0.45), (1.2, 0.35)]
-            for (i, spot) in spots.enumerated() {
-                let r = unit * 0.1 * (0.6 + 0.4 * CGFloat(sin(t * 6 + Double(i) * 1.7)))
-                var sp = ctx
-                sp.opacity = extras
-                sp.fill(sparkle(CGPoint(x: center.x + spot.0 * spread, y: center.y + spot.1 * unit), r), with: ink)
-            }
-        default:
-            break
-        }
+        let clip = FaceClip(source: source, ends: ends)
+        cache[id] = clip
+        return clip
     }
 
-    private static func heart(_ c: CGPoint, _ s: CGFloat) -> Path {
-        let r = s * 0.27
-        var p = Path()
-        p.addEllipse(in: CGRect(x: c.x - r * 1.95, y: c.y - r * 1.3, width: r * 2, height: r * 2))
-        p.addEllipse(in: CGRect(x: c.x - r * 0.05, y: c.y - r * 1.3, width: r * 2, height: r * 2))
-        p.move(to: CGPoint(x: c.x - r * 1.9, y: c.y - r * 0.05))
-        p.addLine(to: CGPoint(x: c.x + r * 1.9, y: c.y - r * 0.05))
-        p.addLine(to: CGPoint(x: c.x, y: c.y + s * 0.5))
-        p.closeSubpath()
-        return p
-    }
-
-    private static func sparkle(_ c: CGPoint, _ r: CGFloat) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: c.x, y: c.y - r))
-        p.addQuadCurve(to: CGPoint(x: c.x + r, y: c.y), control: c)
-        p.addQuadCurve(to: CGPoint(x: c.x, y: c.y + r), control: c)
-        p.addQuadCurve(to: CGPoint(x: c.x - r, y: c.y), control: c)
-        p.addQuadCurve(to: CGPoint(x: c.x, y: c.y - r), control: c)
-        return p
+    func frame(at elapsed: Double) -> CGImage? {
+        CGImageSourceCreateImageAtIndex(source, ends.firstIndex { $0 > elapsed } ?? ends.count - 1, nil)
     }
 }
 
