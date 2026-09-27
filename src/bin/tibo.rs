@@ -33,6 +33,8 @@ struct Args {
     interrupted: bool,
     /// The user addressed Tibo explicitly (typed, or tapped the mic): no wake word needed.
     addressed: bool,
+    /// Tibo answered recently (the app's 15-minute conversation window).
+    conversation: bool,
     prefix: Option<String>,
     language: Option<String>,
     prompt: Option<String>,
@@ -166,6 +168,7 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
             .or_else(|| env::var("TIBO_WHISPER_LANGUAGE").ok())
             .unwrap_or_else(|| "vi".into()),
         interrupted: args.interrupted,
+        conversation: args.conversation,
         session: current_session.snapshot(),
         recent: recent.iter().map(memory::format_turn).collect(),
     };
@@ -288,6 +291,7 @@ fn route_test() -> Result<(), String> {
             wake_matched: true,
             asr_language: "vi".into(),
             interrupted: false,
+            conversation: false,
             session: Default::default(),
             recent: Vec::new(),
         };
@@ -446,6 +450,7 @@ fn parse_args() -> Result<Args, String> {
             "--no-jev" => parsed.no_jev = true,
             "--interrupted" => parsed.interrupted = true,
             "--addressed" => parsed.addressed = true,
+            "--conversation" => parsed.conversation = true,
             "--prefix-transcript" => parsed.prefix = Some(next(&mut args, "--prefix-transcript")?),
             "--language" => parsed.language = Some(next(&mut args, "--language")?),
             "--prompt" => parsed.prompt = Some(next(&mut args, "--prompt")?),

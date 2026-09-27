@@ -68,6 +68,7 @@ fn run() -> Result<bool, String> {
             wake_matched: case.wake,
             asr_language: "vi".into(),
             interrupted: case.interrupted,
+            conversation: false,
             session: SessionSnapshot {
                 active: case.active,
                 agent: case.active.then(|| "codex".into()),

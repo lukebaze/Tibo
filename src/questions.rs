@@ -16,6 +16,10 @@ pub struct Turn {
     pub wake_matched: bool,
     pub asr_language: String,
     pub interrupted: bool,
+    /// Tibo answered within the last 15 minutes: a follow-up needs no wake word, only Jev's
+    /// addressed_to_tibo check.
+    #[serde(default)]
+    pub conversation: bool,
     pub session: SessionSnapshot,
     /// Latest logged turns (`memory::recent_turns`), so follow-ups like "còn Đức?" keep their route.
     #[serde(default)]
@@ -32,7 +36,8 @@ pub fn build_state(turn: &Turn) -> Value {
         },
         "assistant": {
             "name": assistant_name,
-            "was_speaking_when_user_spoke": turn.interrupted
+            "was_speaking_when_user_spoke": turn.interrupted,
+            "in_conversation_with_user": turn.conversation
         },
         "session": {
             "active": turn.session.active,
@@ -50,7 +55,7 @@ pub fn questions() -> Value {
     json!({
         "addressed_to_tibo": {
             "type": "noul",
-            "instructions": format!("The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant {name}. Session context or an interruption can make an utterance addressed even without the wake word."),
+            "instructions": format!("The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant {name}. Session context, an interruption, or an ongoing conversation (assistant.in_conversation_with_user, see recent_conversation) can make an utterance addressed even without the wake word; in a conversation, a follow-up question or request is addressed, but talk to other people or media audio is not."),
             "criteria": {
                 "true": format!("The user is speaking to {name} or controlling the active {name} task."),
                 "false": "Background speech, another person, dictation, or self-talk not directed at the assistant."

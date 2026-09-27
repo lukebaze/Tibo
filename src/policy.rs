@@ -116,8 +116,10 @@ pub enum Decision {
 }
 
 pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decision {
-    let has_context =
-        turn.session.active || turn.interrupted || turn.session.pending_confirmation.is_some();
+    let has_context = turn.session.active
+        || turn.interrupted
+        || turn.conversation
+        || turn.session.pending_confirmation.is_some();
     if !turn.wake_matched && !has_context {
         return Decision::Ignore { reason: "no_wake" };
     }
@@ -587,9 +589,27 @@ mod tests {
             wake_matched: true,
             asr_language: "vi".into(),
             interrupted: false,
+            conversation: false,
             session: SessionSnapshot::default(),
             recent: Vec::new(),
         }
+    }
+
+    #[test]
+    fn conversation_follow_up_needs_no_wake_word_but_must_be_addressed() {
+        let mut follow_up = turn("còn ngày mai thì sao");
+        follow_up.wake_matched = false;
+        let thresholds = Thresholds::default();
+        assert_eq!(decide(&follow_up, &answers("conversation"), &thresholds), Decision::Ignore { reason: "no_wake" });
+
+        follow_up.conversation = true;
+        assert_eq!(decide(&follow_up, &answers("conversation"), &thresholds), Decision::Chat);
+
+        let mut overheard = answers("conversation");
+        overheard.insert("addressed_to_tibo".into(), Answer::Noul { noul: 0.1 });
+        assert_eq!(decide(&follow_up, &overheard, &thresholds), Decision::Ignore { reason: "not_addressed" });
+        // Without Jev there is no addressed check, so the keyword fallback still wants the wake word.
+        assert_eq!(decide_fallback(&follow_up), Decision::Ignore { reason: "no_wake" });
     }
 
     fn answers(route: &str) -> Answers {

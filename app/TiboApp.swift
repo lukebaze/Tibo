@@ -91,6 +91,127 @@ private final class LineReader {
     }
 }
 
+/// One long-lived `pi --mode rpc` per conversation: follow-ups keep their context and skip pi's
+/// start-up. The system prompt and tools are fixed when it starts; `stop()` ends the conversation.
+/// Events of the running prompt go to `onEvent` tagged with the turn that sent it; a prompt sent
+/// while another runs aborts that one and waits for its `agent_end`.
+@MainActor
+private final class PiSession {
+    var onEvent: ((String, Int) -> Void)?
+    /// pi died while `turn` was running.
+    var onExit: ((Int) -> Void)?
+    private var process: Process?
+    private var input: FileHandle?
+    private var reader: LineReader?
+    private var running: Int?
+    private var queued: (message: String, turn: Int)?
+    private var abortID = 0
+
+    var isAlive: Bool { process?.isRunning == true }
+    var busy: Bool { running != nil || queued != nil }
+
+    func start(executable: URL, arguments: [String]) throws {
+        let process = Process()
+        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        process.executableURL = executable
+        process.arguments = ["--mode", "rpc", "--no-session"] + arguments
+        process.environment = AgentCLI.environment()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = stderr
+        let reader = LineReader { [weak self] line in
+            DispatchQueue.main.async { self?.handle(line) }
+        }
+        stdout.fileHandleForReading.readabilityHandler = { reader.feed($0.availableData) }
+        stderr.fileHandleForReading.readabilityHandler = { _ = $0.availableData }
+        process.terminationHandler = { [weak self] ended in
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async { self?.exited(ended) }
+        }
+        try process.run()
+        self.process = process
+        self.reader = reader
+        input = stdin.fileHandleForWriting
+        print("TIBO_PI session_start pid=\(process.processIdentifier)")
+    }
+
+    func prompt(_ message: String, turn: Int) {
+        guard running == nil else {
+            queued = (message, turn)
+            abortRunning()
+            return
+        }
+        running = turn
+        write(["type": "prompt", "message": message])
+    }
+
+    /// Stops the answer in progress; the conversation stays.
+    func abort() {
+        queued = nil
+        if running != nil { abortRunning() }
+    }
+
+    func stop() {
+        guard let process else { return }
+        print("TIBO_PI session_end pid=\(process.processIdentifier)")
+        self.process = nil
+        running = nil
+        queued = nil
+        try? input?.close()
+        input = nil
+        process.terminate()
+    }
+
+    /// An abort that lands before pi starts the run may never produce `agent_end`; don't let the
+    /// queued prompt wait on it forever.
+    private func abortRunning() {
+        write(["type": "abort"])
+        abortID += 1
+        let id = abortID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.abortID == id, self.running != nil else { return }
+            print("TIBO_PI abort_timeout")
+            self.runEnded()
+        }
+    }
+
+    private func handle(_ line: String) {
+        guard let turn = running else { return }
+        onEvent?(line, turn)
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+              let type = object["type"] as? String else { return }
+        let rejected = type == "response" && object["command"] as? String == "prompt" && object["success"] as? Bool == false
+        if type == "agent_end" || rejected { runEnded() }
+    }
+
+    private func runEnded() {
+        running = nil
+        abortID += 1
+        if let next = queued {
+            queued = nil
+            prompt(next.message, turn: next.turn)
+        }
+    }
+
+    private func exited(_ ended: Process) {
+        guard ended === process else { return }
+        print("TIBO_PI exit status=\(ended.terminationStatus)")
+        let turn = running ?? queued?.turn
+        process = nil
+        input = nil
+        running = nil
+        queued = nil
+        if let turn { onExit?(turn) }
+    }
+
+    private func write(_ command: [String: Any]) {
+        guard var data = try? JSONSerialization.data(withJSONObject: command) else { return }
+        data.append(0x0A)
+        try? input?.write(contentsOf: data)
+    }
+}
+
 private final class WavWriter {
     let url: URL
     private let file: AVAudioFile
@@ -206,6 +327,14 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var playingURL: URL?
     private var agentProcess: Process?
     private var agentReaders: [LineReader] = []
+    /// pi turns (chat and workflows) run in one rpc process per conversation.
+    private let pi = PiSession()
+    /// A conversation lasts until `conversationLimit` passes without a handled turn; while it
+    /// lasts follow-ups need no wake word (the backend still checks they are addressed) and the
+    /// face is awake instead of asleep.
+    @Published private(set) var awake = false
+    private static let conversationLimit = TimeInterval(ProcessInfo.processInfo.environment["TIBO_CONVERSATION_SECONDS"] ?? "") ?? 15 * 60
+    private var conversationEnd: DispatchWorkItem?
     private var llmReceivedText = false
     private var llmFinalSent = false
     /// User text and route of the running agent turn, logged to memory once the answer is complete.
@@ -242,6 +371,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             self.stopWhisperServer()
             self.startWhisperServer()
         }.store(in: &observers)
+        pi.onEvent = { [weak self] line, turn in self?.handlePiEvent(line, turn: turn) }
+        pi.onExit = { [weak self] turn in self?.finishAgent(turn: turn, failed: true) }
     }
 
     var voiceMode: Profile.VoiceMode { currentProfile.voiceMode }
@@ -330,6 +461,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var isResponding: Bool {
         backendProcess?.isRunning == true
             || agentProcess?.isRunning == true
+            || pi.busy
             || player?.isPlaying == true
             || !queuedAudio.isEmpty
             || ttsResponsePending
@@ -671,6 +803,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         var arguments = baseArguments
         if interrupted { arguments.append("--interrupted") }
         if addressedTurn { arguments.append("--addressed") }
+        if awake { arguments.append("--conversation") }
         if let prefixTranscript { arguments += ["--prefix-transcript", prefixTranscript] }
         process.arguments = arguments
         var environment = backendEnvironment()
@@ -728,6 +861,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     }
 
     private func parseBackendLine(_ line: String, turn id: Int) {
+        // Any of these means Tibo took the turn (an ignored one prints none of them).
+        if ["TIBO_TURN incomplete", "TIBO_NATIVE_ACTION ", "TIBO_ROUTE_RESULT ", "TIBO_SAY ", "TIBO_LLM_REQUEST ", "TIBO_SCREEN_REQUEST "].contains(where: line.hasPrefix) {
+            keepAwake()
+        }
         if line.hasPrefix("TRANSCRIPT: ") {
             transcript = String(line.dropFirst("TRANSCRIPT: ".count))
             print("TIBO_STT turn_id=\(id) text=\(transcript)")
@@ -791,7 +928,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 print("TIBO_LLM_REQUEST malformed JSON ignored")
                 return
             }
-            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, request.workflow.map { "workflow:\($0.id)" } ?? "conversation"), turn: id, workflow: request.workflow)
+            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, request.workflow.map { "workflow:\($0.id)" } ?? "conversation"), turn: id, workflow: request.workflow, conversational: true)
         } else if line.hasPrefix("TIBO_SCREEN_REQUEST ") {
             let payload = line.dropFirst("TIBO_SCREEN_REQUEST ".count)
             guard let request = try? JSONDecoder().decode(ScreenRequest.self, from: Data(payload.utf8)) else {
@@ -927,13 +1064,18 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     /// `image` is attached for vision turns (pi/omp `@file`, codex `-i`) and deleted when the agent exits.
     /// Claude Code runs with no tools here, so it only gets the OCR text already in `prompt`.
     /// A `workflow` turn is the one place the conversational agent may run commands (bash only).
-    private func startAgent(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, image: URL? = nil, workflow: LlmRequest.Workflow? = nil) {
+    private func startAgent(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, image: URL? = nil, workflow: LlmRequest.Workflow? = nil, conversational: Bool = false) {
         let agent = currentProfile.agent
         guard let executable = AgentCLI.resolve(agent) else {
             let text = "Chưa cài \(agent.title)."
             summary = text
             sendTts(text: text, final: true, turn: id)
             state = .listening
+            return
+        }
+        // Screen turns carry untrusted screen text or images, so they stay one-shot without tools.
+        if agent == .pi && conversational {
+            runInConversation(prompt: prompt, context: context, memoryTurn: memoryTurn, turn: id, workflow: workflow, executable: executable)
             return
         }
         let process = Process()
@@ -1028,6 +1170,62 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
+    /// Chat and workflow turns for pi: one rpc session per conversation, started with bash and a
+    /// system prompt that allows it only for workflow turns. The memory block goes in once, at the
+    /// start; afterwards pi carries the conversation itself.
+    private func runInConversation(prompt: String, context: String, memoryTurn: (user: String, route: String), turn id: Int, workflow: LlmRequest.Workflow?, executable: URL) {
+        if !pi.isAlive {
+            var system = llmSystemPrompt(canAct: true)
+                + " Công cụ bash chỉ dùng cho các khối Quy trình: khi tin nhắn mở đầu bằng một khối Quy trình, hoặc khi người dùng hỏi tiếp việc của một quy trình đã có trong cuộc trò chuyện này (ví dụ hỏi thời tiết nơi khác, đổi giờ nhắc việc), thì chỉ dùng đúng các lệnh quy trình đó đã cho. Ngoài ra chỉ trò chuyện, không chạy lệnh và không tuyên bố đã thao tác trên máy."
+            if !context.isEmpty { system += "\n\n\(context)" }
+            let model = currentProfile.agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            do {
+                try pi.start(executable: executable, arguments: ["--tools", "bash", "--system-prompt", system] + (model.isEmpty ? [] : ["--model", model]))
+            } catch {
+                fail("Tôi chưa thể trả lời lúc này.")
+                sendTts(text: summary, final: true, turn: id)
+                state = .listening
+                return
+            }
+        }
+        llmReceivedText = false
+        llmFinalSent = false
+        agentMemoryTurn = memoryTurn
+        llmStartedAt = Date()
+        summary = ""
+        state = .processing
+        pi.prompt(workflow.map { "\($0.instructions)\n\nNgười dùng nói: \(prompt)" } ?? prompt, turn: id)
+    }
+
+    private func handlePiEvent(_ line: String, turn id: Int) {
+        guard id == turnID else { return }
+        if line.contains("\"success\":false"),
+           let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+           object["type"] as? String == "response", object["command"] as? String == "prompt" {
+            print("TIBO_PI prompt_rejected \(object["error"] as? String ?? "")")
+            finishAgent(turn: id, failed: true)
+            return
+        }
+        parseOmpLine(line, turn: id)
+    }
+
+    /// Each handled turn restarts the 15-minute clock; when it runs out the conversation (and pi) ends.
+    private func keepAwake() {
+        awake = true
+        conversationEnd?.cancel()
+        let end = DispatchWorkItem { [weak self] in self?.endConversation() }
+        conversationEnd = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.conversationLimit, execute: end)
+    }
+
+    private func endConversation() {
+        guard !isResponding else { keepAwake(); return }
+        print("TIBO_CONVERSATION end")
+        awake = false
+        conversationEnd = nil
+        pi.stop()
+    }
+
     /// `canAct` drops the "never claim you acted" rule for workflow turns, where the agent really runs commands.
     private func llmSystemPrompt(canAct: Bool) -> String {
         let assistant = currentProfile.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1102,6 +1300,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             logMemoryTurn(user: memoryTurn.user, tibo: summary, route: memoryTurn.route)
         }
         agentMemoryTurn = nil
+        keepAwake()
         if !llmReceivedText && failed {
             fail("Tôi chưa thể trả lời lúc này.")
             sendTts(text: summary, final: true, turn: id)
@@ -1176,6 +1375,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         currentProfile = next
         transcript = "Nói “\(next.assistantName)” để bắt đầu"
         if next.voiceMode == .wake { armed = false }
+        // The session's system prompt and model were fixed at start; the next turn starts a fresh one.
+        if previous.agent != next.agent || previous.agentModel != next.agentModel
+            || previous.assistantName != next.assistantName || previous.userName != next.userName {
+            pi.stop()
+        }
         if previous.ttsEngine != next.ttsEngine || previous.ttsVoice != next.ttsVoice {
             stopTtsServer()
             startTtsServer()
@@ -1255,6 +1459,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         backendRunning = false
         agentProcess?.terminate()
         agentProcess = nil
+        pi.abort()
         sendTtsCancel(turn: oldID)
         queuedAudio.values.forEach { try? FileManager.default.removeItem(at: $0) }
         queuedAudio.removeAll()
@@ -1722,7 +1927,7 @@ private struct ContentView: View {
     private var mood: BuddyFace.Mood {
         if let reaction { return reaction }
         switch voice.state {
-        case .listening: return .idle
+        case .listening: return voice.awake ? .idle : .sleeping
         case .processing, .transcribing: return .thinking
         case .speaking: return .talking
         case .approval: return .asking
@@ -1869,6 +2074,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notch: NotchController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // pi's rpc stdin is written from here; if pi dies mid-write, fail the write instead of dying.
+        signal(SIGPIPE, SIG_IGN)
         // Two instances hear each other's TTS and answer every question twice; the running one wins.
         let me = NSRunningApplication.current
         if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
