@@ -1,5 +1,5 @@
 [package]
-name = "graviz"
+name = "tibo"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,9 +9,13 @@ serde_json = "1"
 ureq = { version = "3", features = ["json"] }
 
 [[bin]]
-name = "graviz"
-path = "src/bin/graviz.rs"
+name = "tibo"
+path = "src/bin/tibo.rs"
 
 [[bin]]
-name = "graviz-bench"
-path = "src/bin/graviz-bench.rs"
+name = "tibo-bench"
+path = "src/bin/tibo-bench.rs"
+
+[[bin]]
+name = "tibo-web"
+path = "src/bin/tibo-web.rs"

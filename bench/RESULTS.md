@@ -1,3 +1,3 @@
-# Graviz Jev benchmark
+# Tibo Jev benchmark
 
-`BENCH_SUMMARY accuracy=92.50% false_exec=0.00% clarify=25.00% p50_ms=1241 p95_ms=1396 cost_usd=0.006265`
+`BENCH_SUMMARY accuracy=100.00% false_exec=0.00% clarify=0.00% p50_ms=351 p95_ms=465 cost_usd=0.000896`

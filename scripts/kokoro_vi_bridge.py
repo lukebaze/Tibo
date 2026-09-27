@@ -28,8 +28,8 @@ CONTEXT_LENGTH = 512
 # One input id per phoneme plus the two boundary zeros, which is also how many
 # style frames the voicepacks carry (510 observed on all of them).
 MAX_PHONEMES = CONTEXT_LENGTH - 2
-DEFAULT_MODEL_DIR = "~/.local/share/graviz/models/kokoro-vi"
-DEFAULT_VOICE = "diem_trinh"
+DEFAULT_MODEL_DIR = "~/.local/share/tibo/models/kokoro-vi"
+DEFAULT_VOICE = "ngoc_huyen"
 DEFAULT_CROSSFADE_MS = 50
 
 

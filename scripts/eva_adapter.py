@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe Graviz adapter for Eva's local evaluation loop.
+"""Safe Tibo adapter for Eva's local evaluation loop.
 
 Eva remains the evaluator. Validate mode is the default and only validates Eva's
 real dataset/configuration. Running conversations is opt-in and requires both
@@ -74,7 +74,7 @@ class EvalResult:
 
 
 def build_command(request: EvalRequest, python: Path) -> list[str]:
-    """Return the only Eva command Graviz is allowed to launch for this mode."""
+    """Return the only Eva command Tibo is allowed to launch for this mode."""
     _ = request
     command = [str(python), "-m", "eva.cli"]
     if request.mode == "validate":
@@ -114,13 +114,13 @@ def build_environment(request: EvalRequest) -> dict[str, str]:
             "LITELLM_LOCAL_MODEL_COST_MAP": "true",
             # Eva skips pipeline/service validation at zero attempts; no provider is contacted.
             "EVA_MAX_RERUN_ATTEMPTS": "0",
-            "EVA_RUN_ID": "graviz-dry-run",
+            "EVA_RUN_ID": "tibo-dry-run",
             "EVA_DOMAIN": request.domain,
             "EVA_MODEL_LIST": json.dumps(
                 [
                     {
-                        "model_name": "graviz-dry-run",
-                        "litellm_params": {"model": "openai/graviz-dry-run", "api_key": "dry-run"},
+                        "model_name": "tibo-dry-run",
+                        "litellm_params": {"model": "openai/tibo-dry-run", "api_key": "dry-run"},
                     }
                 ]
             ),
@@ -132,7 +132,7 @@ def build_environment(request: EvalRequest) -> dict[str, str]:
 
 
 def _python_for(request: EvalRequest) -> Path:
-    configured = os.environ.get("GRAVIZ_EVA_PYTHON")
+    configured = os.environ.get("TIBO_EVA_PYTHON")
     if configured:
         return Path(configured)
     virtualenv_python = request.eva_root / ".venv" / "bin" / "python"
@@ -167,7 +167,7 @@ def run_eval(request: EvalRequest) -> EvalResult:
 
     try:
         if request.mode == "validate":
-            with tempfile.TemporaryDirectory(prefix="graviz-eva-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="tibo-eva-") as temporary:
                 cwd = Path(temporary)
                 # Eva's dataset_path is relative to cwd. The symlink exposes only its real
                 # local dataset while keeping cwd away from Eva's .env and local secrets.
@@ -246,12 +246,12 @@ def result_marker(result: EvalResult) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run Eva's local evaluation loop through Graviz.")
+    parser = argparse.ArgumentParser(description="Run Eva's local evaluation loop through Tibo.")
     parser.add_argument(
         "--eva-root",
         type=Path,
-        default=Path(os.environ.get("GRAVIZ_EVA_ROOT", Path.home() / "eva")),
-        help="Eva checkout (default: GRAVIZ_EVA_ROOT or ~/eva)",
+        default=Path(os.environ.get("TIBO_EVA_ROOT", Path.home() / "eva")),
+        help="Eva checkout (default: TIBO_EVA_ROOT or ~/eva)",
     )
     parser.add_argument("--domain", choices=SUPPORTED_DOMAINS, default="airline")
     parser.add_argument("--record-id", action="append", default=[], help="Record ID (repeatable)")
@@ -273,11 +273,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_id=args.run_id,
         output_dir=args.output_dir,
     )
-    print(f"GRAVIZ_EVAL_START {start_marker(request)}", flush=True)
+    print(f"TIBO_EVAL_START {start_marker(request)}", flush=True)
     result = run_eval(request)
-    print(f"GRAVIZ_EVAL {result_marker(result)}", flush=True)
+    print(f"TIBO_EVAL {result_marker(result)}", flush=True)
     if result.error:
-        print(f"GRAVIZ_EVAL_ERROR {result.error}", file=sys.stderr, flush=True)
+        print(f"TIBO_EVAL_ERROR {result.error}", file=sys.stderr, flush=True)
     return result.exit_code
 
 

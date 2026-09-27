@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::HashMap, env, fmt, fs, io::Write, path::PathBuf, process::{Command, Stdio}, thread, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    env, fmt, fs,
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
 
 pub type Answers = HashMap<String, Answer>;
 
@@ -21,7 +29,9 @@ pub enum Answer {
         #[serde(default)]
         confidence: f64,
     },
-    Noul { noul: f64 },
+    Noul {
+        noul: f64,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,25 +81,36 @@ pub struct JevClient {
 
 impl JevClient {
     pub fn from_env() -> Result<Self, JevError> {
-        let fixture = env::var_os("GRAVIZ_JEV_FIXTURE").map(PathBuf::from);
+        let fixture = env::var_os("TIBO_JEV_FIXTURE").map(PathBuf::from);
         let api_key = env::var("TYPESAFE_API_KEY").unwrap_or_default();
         if fixture.is_none() && api_key.is_empty() {
             return Err(JevError::Transport("TYPESAFE_API_KEY is required".into()));
         }
         Ok(Self {
             api_key,
-            base: env::var("GRAVIZ_JEV_BASE").unwrap_or_else(|_| "https://api.typesafe.ai".into()).trim_end_matches('/').into(),
-            model: env::var("GRAVIZ_JEV_MODEL").unwrap_or_else(|_| "jev-1.13.0".into()),
-            timeout_ms: env::var("GRAVIZ_JEV_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(1500),
+            base: env::var("TIBO_JEV_BASE")
+                .unwrap_or_else(|_| "https://api.typesafe.ai".into())
+                .trim_end_matches('/')
+                .into(),
+            model: env::var("TIBO_JEV_MODEL").unwrap_or_else(|_| "jev-1.13.0".into()),
+            timeout_ms: env::var("TIBO_JEV_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1500),
             fixture,
         })
     }
 
     pub fn system_one(&self, state: &Value, questions: &Value) -> Result<Answers, JevError> {
-        self.system_one_with_meta(state, questions).map(|response| response.answers)
+        self.system_one_with_meta(state, questions)
+            .map(|response| response.answers)
     }
 
-    pub fn system_one_with_meta(&self, state: &Value, questions: &Value) -> Result<JevResponse, JevError> {
+    pub fn system_one_with_meta(
+        &self,
+        state: &Value,
+        questions: &Value,
+    ) -> Result<JevResponse, JevError> {
         let started = Instant::now();
         let result = if let Some(path) = &self.fixture {
             self.from_fixture(path, state)
@@ -97,17 +118,35 @@ impl JevClient {
             self.request(state, questions)
         };
         match &result {
-            Ok(response) => eprintln!("GRAVIZ_JEV status=ok ms={} input_tokens={} model={}", started.elapsed().as_millis(), response.usage.input_tokens, response.model),
-            Err(_) => eprintln!("GRAVIZ_JEV status=err ms={} input_tokens=0 model={}", started.elapsed().as_millis(), self.model),
+            Ok(response) => eprintln!(
+                "TIBO_JEV status=ok ms={} input_tokens={} model={}",
+                started.elapsed().as_millis(),
+                response.usage.input_tokens,
+                response.model
+            ),
+            Err(_) => eprintln!(
+                "TIBO_JEV status=err ms={} input_tokens=0 model={}",
+                started.elapsed().as_millis(),
+                self.model
+            ),
         }
         result
     }
 
     fn from_fixture(&self, path: &PathBuf, state: &Value) -> Result<JevResponse, JevError> {
-        let fixtures: HashMap<String, Answers> = serde_json::from_slice(&fs::read(path).map_err(|e| JevError::Transport(e.to_string()))?)
-            .map_err(|e| JevError::Transport(e.to_string()))?;
-        let answers = fixtures.get(&state_hash(state)?).cloned().ok_or(JevError::FixtureMiss)?;
-        Ok(JevResponse { model: "fixture".into(), answers, usage: Usage::default() })
+        let fixtures: HashMap<String, Answers> = serde_json::from_slice(
+            &fs::read(path).map_err(|e| JevError::Transport(e.to_string()))?,
+        )
+        .map_err(|e| JevError::Transport(e.to_string()))?;
+        let answers = fixtures
+            .get(&state_hash(state)?)
+            .cloned()
+            .ok_or(JevError::FixtureMiss)?;
+        Ok(JevResponse {
+            model: "fixture".into(),
+            answers,
+            usage: Usage::default(),
+        })
     }
 
     fn request(&self, state: &Value, questions: &Value) -> Result<JevResponse, JevError> {
@@ -119,13 +158,14 @@ impl JevClient {
             .into();
         let url = format!("{}/v1/systemone", self.base);
         for attempt in 0..=1 {
-            let response = agent.post(&url)
+            let response = agent
+                .post(&url)
                 .header("Authorization", &format!("Bearer {}", self.api_key))
                 .send_json(&body);
             match response {
                 Ok(mut response) if response.status().is_success() => {
                     let parsed: JevResponse = response.body_mut().read_json().map_err(map_ureq)?;
-                    if let Ok(path) = env::var("GRAVIZ_JEV_RECORD") {
+                    if let Ok(path) = env::var("TIBO_JEV_RECORD") {
                         record_fixture(PathBuf::from(path), state, &parsed.answers)?;
                     }
                     return Ok(parsed);
@@ -161,24 +201,38 @@ pub fn state_hash(state: &Value) -> Result<String, JevError> {
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| JevError::Transport(e.to_string()))?;
-    child.stdin.take().unwrap().write_all(&serde_json::to_vec(state).map_err(|e| JevError::Transport(e.to_string()))?)
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(state).map_err(|e| JevError::Transport(e.to_string()))?)
         .map_err(|e| JevError::Transport(e.to_string()))?;
-    let output = child.wait_with_output().map_err(|e| JevError::Transport(e.to_string()))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| JevError::Transport(e.to_string()))?;
     if !output.status.success() {
         return Err(JevError::Transport("shasum failed".into()));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).split_whitespace().next().unwrap_or_default().into())
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .into())
 }
 
 fn record_fixture(path: PathBuf, state: &Value, answers: &Answers) -> Result<(), JevError> {
     let mut fixtures: HashMap<String, Answers> = if path.exists() {
-        serde_json::from_slice(&fs::read(&path).map_err(|e| JevError::Transport(e.to_string()))?).unwrap_or_default()
+        serde_json::from_slice(&fs::read(&path).map_err(|e| JevError::Transport(e.to_string()))?)
+            .unwrap_or_default()
     } else {
         HashMap::new()
     };
     fixtures.insert(state_hash(state)?, answers.clone());
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(&fixtures).map_err(|e| JevError::Transport(e.to_string()))?)
-        .and_then(|_| fs::rename(tmp, path))
-        .map_err(|e| JevError::Transport(e.to_string()))
+    fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(&fixtures).map_err(|e| JevError::Transport(e.to_string()))?,
+    )
+    .and_then(|_| fs::rename(tmp, path))
+    .map_err(|e| JevError::Transport(e.to_string()))
 }

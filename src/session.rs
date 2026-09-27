@@ -1,6 +1,14 @@
-use crate::{policy::{Agent, PendingAction}, questions::SessionSnapshot};
+use crate::{
+    policy::{Agent, PendingAction},
+    questions::SessionSnapshot,
+};
 use serde::{Deserialize, Serialize};
-use std::{env, fs, io, path::{Path, PathBuf}, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    env, fs, io,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingConfirmation {
@@ -14,6 +22,7 @@ pub struct Session {
     #[serde(default)]
     pub active: bool,
     pub agent: Option<Agent>,
+    pub command: Option<String>,
     pub task: Option<String>,
     pub status: Option<String>,
     pub pid: Option<u32>,
@@ -28,6 +37,7 @@ impl Default for Session {
         Self {
             active: false,
             agent: None,
+            command: None,
             task: None,
             status: None,
             pid: None,
@@ -46,10 +56,18 @@ impl Session {
             agent: self.agent.map(|agent| agent.as_str().to_string()),
             task: self.task.clone(),
             status: self.status.clone(),
-            pending_confirmation: self.pending_confirmation.as_ref().map(|pending| match &pending.action {
-                PendingAction::Closed { intent } => intent.as_str().to_string(),
-                PendingAction::Coding { agent, prompt } => format!("{}: {}", agent.as_str(), prompt),
-            }),
+            pending_confirmation: self
+                .pending_confirmation
+                .as_ref()
+                .map(|pending| match &pending.action {
+                    PendingAction::Closed { intent } => intent.as_str().to_string(),
+                    PendingAction::Coding { agent, prompt } => {
+                        format!("{}: {}", agent.as_str(), prompt)
+                    }
+                    PendingAction::ComputerUse { prompt } => {
+                        format!("computer_use: {prompt}")
+                    }
+                }),
         }
     }
 }
@@ -59,7 +77,7 @@ pub fn path() -> PathBuf {
 }
 
 pub fn data_dir() -> PathBuf {
-    PathBuf::from(env::var_os("HOME").unwrap_or_else(|| "/tmp".into())).join(".local/share/graviz")
+    PathBuf::from(env::var_os("HOME").unwrap_or_else(|| "/tmp".into())).join(".local/share/tibo")
 }
 
 pub fn load() -> Session {
@@ -68,7 +86,7 @@ pub fn load() -> Session {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(session) => session,
             Err(_) => {
-                eprintln!("GRAVIZ_SESSION corrupt; reset");
+                eprintln!("TIBO_SESSION corrupt; reset");
                 let session = Session::default();
                 let _ = save(&session);
                 session
@@ -76,11 +94,15 @@ pub fn load() -> Session {
         },
         Err(error) if error.kind() == io::ErrorKind::NotFound => Session::default(),
         Err(error) => {
-            eprintln!("GRAVIZ_SESSION load failed: {error}");
+            eprintln!("TIBO_SESSION load failed: {error}");
             Session::default()
         }
     };
-    if session.pending_confirmation.as_ref().is_some_and(|pending| pending.expires_at <= now_rfc3339()) {
+    if session
+        .pending_confirmation
+        .as_ref()
+        .is_some_and(|pending| pending.expires_at <= now_rfc3339())
+    {
         session.pending_confirmation = None;
         let _ = save(&session);
     }
@@ -102,7 +124,14 @@ pub fn refresh(session: &mut Session) {
         return;
     }
     let exit_code = session.log.as_deref().and_then(last_exit_code);
-    session.status = Some(if exit_code == Some(0) { "finished" } else { "failed" }.into());
+    session.status = Some(
+        if exit_code == Some(0) {
+            "finished"
+        } else {
+            "failed"
+        }
+        .into(),
+    );
     session.active = false;
     session.pid = None;
     session.pgid = None;
@@ -110,7 +139,10 @@ pub fn refresh(session: &mut Session) {
 }
 
 pub fn pending(action: PendingAction) -> PendingConfirmation {
-    PendingConfirmation { action, expires_at: rfc3339_after(120) }
+    PendingConfirmation {
+        action,
+        expires_at: rfc3339_after(120),
+    }
 }
 
 pub fn now_rfc3339() -> String {
@@ -118,7 +150,11 @@ pub fn now_rfc3339() -> String {
 }
 
 fn rfc3339_after(seconds: u64) -> String {
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + seconds;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + seconds;
     Command::new("/bin/date")
         .args(["-u", "-r", &timestamp.to_string(), "+%Y-%m-%dT%H:%M:%SZ"])
         .output()
@@ -129,11 +165,19 @@ fn rfc3339_after(seconds: u64) -> String {
 }
 
 fn process_alive(pid: u32) -> bool {
-    Command::new("/bin/kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
+    Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn last_exit_code(log: &str) -> Option<i32> {
-    fs::read_to_string(expand_home(log)).ok()?.lines().rev().find_map(|line| line.strip_prefix("GRAVIZ_CHILD_EXIT ")?.trim().parse().ok())
+    fs::read_to_string(expand_home(log))
+        .ok()?
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("TIBO_CHILD_EXIT ")?.trim().parse().ok())
 }
 
 pub fn expand_home(path: &str) -> PathBuf {

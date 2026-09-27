@@ -27,7 +27,7 @@ pub fn build_state(turn: &Turn) -> Value {
             "wake_word_matched": turn.wake_matched
         },
         "assistant": {
-            "name": "Graviz",
+            "name": "Tibo",
             "was_speaking_when_user_spoke": turn.interrupted
         },
         "session": {
@@ -42,32 +42,41 @@ pub fn build_state(turn: &Turn) -> Value {
 
 pub fn questions() -> Value {
     json!({
-        "addressed_to_graviz": {
+        "addressed_to_tibo": {
             "type": "noul",
-            "instructions": "The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant Graviz. Session context or an interruption can make an utterance addressed even without the wake word.",
+            "instructions": "The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant Tibo. Session context or an interruption can make an utterance addressed even without the wake word.",
             "criteria": {
-                "true": "The user is speaking to Graviz or controlling the active Graviz task.",
-                "false": "Background speech, another person, dictation, or self-talk not directed at Graviz."
+                "true": "The user is speaking to Tibo or controlling the active Tibo task.",
+                "false": "Background speech, another person, dictation, or self-talk not directed at Tibo."
             }
         },
         "semantic_complete": {
             "type": "noul",
-            "instructions": "Decide whether the ASR transcript is a complete actionable utterance. Vietnamese requests often omit pronouns and are still complete. Short controls such as dừng, dừng lại ngay, khoan đã, tạm dừng, tiếp tục, xác nhận, and huỷ are complete.",
+            "instructions": "Decide whether the ASR transcript is a complete actionable utterance. Vietnamese requests often omit pronouns and are still complete. When session.active is true, dừng, tạm dừng, tiếp tục, không dùng codex để làm lại, thêm cả smoke test, bổ sung kiểm tra lỗi mạng, xác nhận, and huỷ are complete.",
             "criteria": {
-                "true": "Complete request, question, or short control. Examples: cho xem các agent omp; bench hiệu năng phân loại; claude audit thay đổi; thêm cả smoke test when a session is active.",
-                "false": "Cut off mid-sentence or missing its object. Examples: mở giúp tôi cái; nhờ codex; chạy cái; đổi giúp cái này thành."
+                "true": "Complete request, question, or active-session control/correction/addition. Examples: cho xem các agent omp; bench hiệu năng phân loại; thêm cả smoke test; bổ sung kiểm tra lỗi mạng.",
+                "false": "Cut off mid-sentence or missing its object or destination. Examples: mở giúp tôi cái; nhờ codex; chạy cái; vào trang rồi; đổi giúp cái này thành."
             }
         },
         "route": {
             "type": "choice",
             "instructions": "Classify the user's intent. The transcript may be Vietnamese, mixed Vietnamese-English, and imperfect ASR. Use active session context: a short correction or addition refers to session.task. Choose unclear only when the utterance truly lacks an action or object, not merely because Vietnamese wording is informal.",
             "criteria": {
-                "session_control": "Control the active session: dừng/dừng lại/khoan=stop, tạm dừng/pause=pause, tiếp tục=continue, đến đâu rồi/status=status, không dùng X/sửa yêu cầu=correct, thêm/bổ sung=append, xác nhận=confirm, huỷ/cancel=cancel.",
-                "closed_command": "One fixed command: list/status OMP agents; review/audit the current diff with Claude; run/measure benchmark; validate/run Eva; delete/purge all OMP sessions. Examples: trạng thái các tác tử omp; duyệt code tôi vừa sửa; đo benchmark tiếng việt; kiểm tra bộ dữ liệu eva.",
-                "coding_task": "An open-ended software task that changes or investigates code. Examples: sửa lỗi đăng nhập; thêm endpoint; refactor auth; thêm cả smoke test when no session exists.",
-                "computer_use": "Operate an application, browser, website, payment, or GUI outside coding agents.",
-                "conversation": "Complete non-actionable conversation directed to Graviz.",
-                "unclear": "The action or object is missing, such as nhờ codex, chạy cái, mở giúp tôi cái."
+                "session_control": "Control the active session: dừng/dừng lại/khoan=stop, tạm dừng/pause=pause, tiếp tục=continue, đến đâu rồi/status=status, không dùng codex để làm lại/sửa yêu cầu=correct, thêm cả smoke test/bổ sung kiểm tra lỗi mạng=append, xác nhận=confirm, huỷ/cancel=cancel.",
+                "closed_command": "One fixed command: list/status OMP agents; review/audit the current diff with Claude; run/measure benchmark; validate/run Eva; delete/purge/dọn sạch all OMP sessions or session history. Examples: dọn sạch lịch sử phiên; trạng thái các tác tử omp; duyệt code tôi vừa sửa; đo benchmark tiếng việt.",
+                "coding_task": "An open-ended software task that changes or investigates source code, including implementing UI appearance. Examples: đổi màu nút chính sang xanh; sửa lỗi đăng nhập; thêm endpoint; refactor auth. Do not classify source-code UI changes as computer_use.",
+                "computer_use": "Operate the actual macOS application, browser, website, payment, or GUI outside source code. Examples: mở Safari; open Safari rồi vào GitHub; thanh toán hoá đơn. A missing website or app target such as vào trang rồi is unclear.",
+                "conversation": "Complete non-actionable conversation directed to Tibo.",
+                "unclear": "The action, object, or destination is missing, such as nhờ codex, chạy cái, mở giúp tôi cái, vào trang rồi."
+            }
+        },
+        "computer_mode": {
+            "type": "choice",
+            "instructions": "Classify only computer-use requests. Opening or focusing exactly one named macOS app and doing nothing else is open_or_focus_app. Any browser or GUI observation or interaction, navigation after opening, form submission, message, or payment is general. Choose none for every non-computer-use request.",
+            "criteria": {
+                "open_or_focus_app": "Only open, launch, activate, or focus one explicitly named macOS application. Example: mở Safari.",
+                "general": "Observe or interact with a browser, website, window, dialog, or control. Examples: open Safari rồi vào GitHub; gửi tin nhắn bằng trình duyệt; thanh toán hoá đơn.",
+                "none": "Not a computer-use request."
             }
         },
         "session_action": {
@@ -91,7 +100,7 @@ pub fn questions() -> Value {
             "criteria": {
                 "omp.list_agents": "List or report OMP agents/sessions. Examples: cho xem các agent omp; trạng thái các tác tử omp; omp có agent nào.",
                 "claude.review_change": "Review, audit, duyệt, or xem lại the current code/diff/change. Examples: duyệt code tôi vừa sửa; claude audit phần thay đổi.",
-                "codex.run_benchmark": "Run, measure, bench, or đo Graviz's benchmark. Examples: bench hiệu năng phân loại; đo benchmark tiếng việt.",
+                "codex.run_benchmark": "Run, measure, bench, or đo Tibo's benchmark. Examples: bench hiệu năng phân loại; đo benchmark tiếng việt.",
                 "eva.run_evaluation": "Validate, inspect, or run the local Eva evaluation. Examples: kiểm tra bộ dữ liệu eva; validate eva.",
                 "omp.delete_all_sessions": "Delete, clear, purge, dọn sạch, or remove all OMP sessions/history.",
                 "none": "No fixed command was explicitly requested."
@@ -109,11 +118,11 @@ pub fn questions() -> Value {
         },
         "risk": {
             "type": "score",
-            "instructions": "Score the highest plausible consequence, not just the grammatical tone. Always choose level 2 for delete/purge/clear all sessions or credentials, rm -rf, drop database, force push/reset main, publish secrets, production changes, payments, or irreversible data loss.",
+            "instructions": "Score the highest plausible consequence, not just the grammatical tone. Always choose level 2 for sending or submitting content, changing settings or files, purchases or payments, credentials or secrets, deletion, production changes, or any irreversible action.",
             "criteria": [
                 "Read-only or informational",
-                "Modifies local files or sessions but reversible",
-                "Destructive or irreversible: delete/purge, rm -rf, drop database, force push/reset main, credentials/secrets, production, payments, or data loss"
+                "Reversible local state change with no external submission",
+                "Side-effect-capable or irreversible: send/submit, settings/files, purchase/payment, credentials/secrets, delete, production, or data loss"
             ]
         },
         "needs_reasoning": {

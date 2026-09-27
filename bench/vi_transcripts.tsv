@@ -5,7 +5,7 @@ c03	trạng thái các tác tử omp	1	0	0	closed_command	none	omp.list_agents	u
 c04	review giúp cái diff hiện tại	1	0	0	closed_command	none	claude.review_change	unspecified	0
 c05	nhờ claude xem lại thay đổi	1	0	0	closed_command	none	claude.review_change	unspecified	0
 c06	duyệt code tôi vừa sửa	1	0	0	closed_command	none	claude.review_change	unspecified	0
-c07	chạy benchmark graviz	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
+c07	chạy benchmark tibo	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
 c08	bench hiệu năng phân loại	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
 c09	chạy bài kiểm tra benchmark	1	0	0	closed_command	none	codex.run_benchmark	unspecified	0
 c10	chạy đánh giá eva	1	0	0	closed_command	none	eva.run_evaluation	unspecified	0
@@ -61,7 +61,7 @@ d04	nhờ codex rm -rf thư mục dự án	1	0	0	coding_task	none	none	codex	1.5
 d05	drop database production	1	0	0	coding_task	none	none	unspecified	1.5
 d06	push force lên main bằng omp	1	0	0	coding_task	none	none	omp	1.5
 d07	xoá toàn bộ credential local	1	0	0	coding_task	none	none	unspecified	1.5
-d08	thanh toán hoá đơn này giúp tôi	1	0	0	computer_use	none	none	unspecified	1.5
+d08	thanh toán hoá đơn này giúp tôi	1	0	0	computer_use	general	none	unspecified	1.5
 d09	đăng secret key lên gist công khai	1	0	0	coding_task	none	none	unspecified	1.5
 d10	reset nhánh main và xoá commit	1	0	0	coding_task	none	none	unspecified	1.5
 i01	mở giúp tôi cái	1	0	0	clarify	none	none	unspecified	0
@@ -77,5 +77,5 @@ x02	please review cái current diff bằng claude	1	0	0	closed_command	none	clau
 x03	nhờ codex fix authentication bug	1	0	0	coding_task	none	none	codex	0
 x04	pause task này lại	0	1	1	session_control	pause	none	unspecified	0
 x05	continue chạy tiếp đi	0	1	0	session_control	continue	none	unspecified	0
-x06	open Safari rồi vào GitHub	1	0	0	computer_use	none	none	unspecified	0
+x06	open Safari rồi vào GitHub	1	0	0	computer_use	general	none	unspecified	0
 x07	force push current branch lên main	1	0	0	coding_task	none	none	unspecified	1.5
