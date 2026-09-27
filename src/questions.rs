@@ -54,9 +54,9 @@ pub fn questions() -> Value {
         },
         "semantic_complete": {
             "type": "noul",
-            "instructions": "Decide whether the ASR transcript is a complete actionable utterance. Vietnamese requests often omit pronouns and are still complete. When session.active is true, dừng, tạm dừng, tiếp tục, không dùng codex để làm lại, thêm cả smoke test, bổ sung kiểm tra lỗi mạng, xác nhận, and huỷ are complete.",
+            "instructions": "Decide whether the ASR transcript is a complete actionable utterance. Vietnamese requests often omit pronouns and are still complete. Questions pointing at what is on screen with này/đó/trang này/đoạn này are complete. When session.active is true, dừng, tạm dừng, tiếp tục, không dùng codex để làm lại, thêm cả smoke test, bổ sung kiểm tra lỗi mạng, xác nhận, and huỷ are complete.",
             "criteria": {
-                "true": "Complete request, question, or active-session control/correction/addition. Examples: cho xem các agent omp; bench hiệu năng phân loại; thêm cả smoke test; bổ sung kiểm tra lỗi mạng.",
+                "true": "Complete request, question, or active-session control/correction/addition. Examples: cho xem các agent omp; bench hiệu năng phân loại; thêm cả smoke test; bổ sung kiểm tra lỗi mạng; lỗi này nghĩa là gì; tóm tắt trang này.",
                 "false": "Cut off mid-sentence or missing its object or destination. Examples: mở giúp tôi cái; nhờ codex; chạy cái; vào trang rồi; đổi giúp cái này thành."
             }
         },
@@ -67,17 +67,18 @@ pub fn questions() -> Value {
                 "session_control": "Control the active session: dừng/dừng lại/khoan=stop, tạm dừng/pause=pause, tiếp tục=continue, đến đâu rồi/status=status, không dùng codex để làm lại/sửa yêu cầu=correct, thêm cả smoke test/bổ sung kiểm tra lỗi mạng=append, xác nhận=confirm, huỷ/cancel=cancel.",
                 "closed_command": "One fixed command: list/status OMP agents; review/audit the current diff with Claude; run/measure benchmark; validate/run Eva; delete/purge/dọn sạch all OMP sessions or session history. Examples: dọn sạch lịch sử phiên; trạng thái các tác tử omp; duyệt code tôi vừa sửa; đo benchmark tiếng việt.",
                 "coding_task": "An open-ended software task that changes or investigates source code, including implementing UI appearance. Examples: đổi màu nút chính sang xanh; sửa lỗi đăng nhập; thêm endpoint; refactor auth. Do not classify source-code UI changes as computer_use.",
-                "computer_use": "Operate the actual macOS application, browser, website, payment, or GUI outside source code. Examples: mở Safari; open Safari rồi vào GitHub; thanh toán hoá đơn. A missing website or app target such as vào trang rồi is unclear.",
+                "computer_use": "Operate or look at the actual macOS application, browser, website, payment, or GUI outside source code, including questions about what is currently on screen. Examples: mở Safari; open Safari rồi vào GitHub; thanh toán hoá đơn; trên màn hình đang có gì; lỗi này nghĩa là gì; tóm tắt trang đang mở; dịch đoạn này sang tiếng Anh. A missing website or app target such as vào trang rồi is unclear.",
                 "conversation": format!("Complete non-actionable conversation directed to {name}."),
                 "unclear": "The action, object, or destination is missing, such as nhờ codex, chạy cái, mở giúp tôi cái, vào trang rồi."
             }
         },
         "computer_mode": {
             "type": "choice",
-            "instructions": "Classify only computer-use requests. Opening or focusing exactly one named macOS app and doing nothing else is open_or_focus_app. Any browser or GUI observation or interaction, navigation after opening, form submission, message, or payment is general. Choose none for every non-computer-use request.",
+            "instructions": "Classify only computer-use requests. Opening or focusing exactly one named macOS app and doing nothing else is open_or_focus_app. Only looking at, reading, summarizing, translating, or explaining what is already visible, without clicking or typing, is read_screen. Any interaction, navigation after opening, form submission, message, or payment is general. Choose none for every non-computer-use request.",
             "criteria": {
                 "open_or_focus_app": "Only open, launch, activate, or focus one explicitly named macOS application. Example: mở Safari.",
-                "general": "Observe or interact with a browser, website, window, dialog, or control. Examples: open Safari rồi vào GitHub; gửi tin nhắn bằng trình duyệt; thanh toán hoá đơn.",
+                "read_screen": "Answer from what is currently on screen without touching anything. Examples: trên màn hình đang có gì; lỗi này nghĩa là gì; tóm tắt trang đang mở; dịch đoạn này; biểu đồ này nói gì.",
+                "general": "Interact with a browser, website, window, dialog, or control. Examples: open Safari rồi vào GitHub; bấm nút gửi; gửi tin nhắn bằng trình duyệt; thanh toán hoá đơn.",
                 "none": "Not a computer-use request."
             }
         },

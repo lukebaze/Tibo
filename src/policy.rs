@@ -98,6 +98,8 @@ pub enum Decision {
     Closed { intent: ClosedIntent },
     Coding { agent: Agent, prompt: String },
     OpenApp { name: String },
+    /// Read-only question about the current screen; `vision` attaches the screenshot, otherwise OCR text only.
+    ReadScreen { vision: bool },
     Chat,
     NeedConfirm { pending: PendingAction, say: String },
 }
@@ -227,6 +229,11 @@ pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decisi
                         },
                     }
                 }
+                Some(("read_screen", confidence)) if confidence >= thresholds.action_conf_min => {
+                    Decision::ReadScreen {
+                        vision: needs_vision(&turn.transcript),
+                    }
+                }
                 Some(("general", confidence)) if confidence >= thresholds.action_conf_min => {
                     confirmation(
                         PendingAction::ComputerUse {
@@ -275,6 +282,14 @@ pub fn decide_fallback(turn: &Turn) -> Decision {
     if let Some(name) = parse_app_name(&turn.transcript) {
         return Decision::OpenApp { name };
     }
+    if contains_any(
+        &text,
+        &["man hinh", "trang nay", "cua so nay", "loi nay", "doan nay", "tren screen", "screen"],
+    ) {
+        return Decision::ReadScreen {
+            vision: needs_vision(&turn.transcript),
+        };
+    }
     let intent = if contains_any(
         &text,
         &[
@@ -319,6 +334,19 @@ pub fn decide_fallback(turn: &Turn) -> Decision {
         Some(intent) => Decision::Closed { intent },
         None => Decision::Chat,
     }
+}
+
+/// ponytail: keyword split between OCR (fast, on-device text) and a screenshot for a vision model;
+/// upgrade to a Jev `screen_detail` question if users ask visual questions without these words.
+fn needs_vision(transcript: &str) -> bool {
+    // "màn hình" (screen) is in most screen questions; only a standalone "hình" means a picture.
+    let text = transcript.to_lowercase().replace("màn hình", "");
+    [
+        "ảnh", "hình", "nhìn", "trông", "giao diện", "màu", "biểu đồ", "bố cục", "biểu tượng", "icon", "chart",
+        "image", "look",
+    ]
+    .iter()
+    .any(|word| text.contains(word))
 }
 
 fn confirmation(pending: PendingAction, description: &str) -> Decision {
@@ -421,6 +449,8 @@ pub fn normalize(input: &str) -> String {
     input
         .to_lowercase()
         .chars()
+        // Decomposed (NFD) input: drop combining marks so "màn" typed as m-a-U+0300-n still folds to "man".
+        .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
         .map(|c| match c {
             'à' | 'á' | 'ạ' | 'ả' | 'ã' | 'â' | 'ầ' | 'ấ' | 'ậ' | 'ẩ' | 'ẫ' | 'ă' | 'ằ' | 'ắ'
             | 'ặ' | 'ẳ' | 'ẵ' => 'a',
@@ -640,6 +670,20 @@ mod tests {
                 name: "Safari".into()
             }
         );
+    }
+
+    #[test]
+    fn screen_questions_answer_without_confirmation() {
+        let mut a = answers("computer_use");
+        set_choice(&mut a, "computer_mode", "read_screen");
+        let t = Thresholds::default();
+        // "anh" (pronoun) must not trigger vision; "ảnh"/"biểu đồ" must.
+        assert_eq!(decide(&turn("anh xem lỗi này nghĩa là gì"), &a, &t), Decision::ReadScreen { vision: false });
+        assert_eq!(decide(&turn("biểu đồ trong ảnh này nói gì"), &a, &t), Decision::ReadScreen { vision: true });
+        assert_eq!(decide_fallback(&turn("trên màn hình đang có gì")), Decision::ReadScreen { vision: false });
+        let decomposed = "tre\u{302}n ma\u{300}n hi\u{300}nh đang co\u{301} gi\u{300}";
+        assert_eq!(decide_fallback(&turn(decomposed)), Decision::ReadScreen { vision: false });
+        assert_eq!(decide_fallback(&turn("mở Safari")), Decision::OpenApp { name: "Safari".into() });
     }
 
     #[test]

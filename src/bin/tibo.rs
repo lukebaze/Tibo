@@ -162,6 +162,11 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
     if args.emit_text && matches!(decision, policy::Decision::Chat) {
         return write_event("TIBO_LLM_REQUEST", &turn.transcript);
     }
+    if let (true, policy::Decision::ReadScreen { vision }) = (args.emit_text, &decision) {
+        let payload = serde_json::json!({ "question": turn.transcript, "vision": vision });
+        println!("TIBO_SCREEN_REQUEST {payload}");
+        return io::stdout().flush().map_err(|e| e.to_string());
+    }
     let say = handlers::handle(decision, &mut current_session);
     if let Some(text) = say.filter(|text| !text.is_empty()) {
         if args.emit_text {

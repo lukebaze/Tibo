@@ -34,6 +34,11 @@ pub fn handle(decision: Decision, session: &mut Session) -> Option<String> {
             println!("TIBO_TURN chat");
             Some("Tôi đang nghe.".into())
         }
+        // The notch app handles screen questions itself (TIBO_SCREEN_REQUEST); CLI and web have no capture path.
+        Decision::ReadScreen { .. } => {
+            println!("TIBO_TURN read_screen");
+            Some("Đọc màn hình chỉ chạy trong app Tibo.".into())
+        }
         Decision::OpenApp { name } => {
             let summary = format!("Đang mở {name}.");
             route_start("tibo", "open_app", &summary);

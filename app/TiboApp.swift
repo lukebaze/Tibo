@@ -5,6 +5,7 @@ import SoundAnalysis
 import Speech
 import SwiftUI
 import Combine
+import Vision
 
 private enum VoiceState: String {
     case listening = "Đang nghe"
@@ -25,6 +26,11 @@ private struct RouteResult: Decodable {
 private struct NativeAction: Decodable {
     let action: String
     let target: String
+}
+
+private struct ScreenRequest: Decodable {
+    let question: String
+    let vision: Bool
 }
 
 private struct TtsWavEvent: Decodable {
@@ -282,7 +288,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     }
 
     func submitTyped(_ raw: String) {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Typed/pasted Vietnamese can arrive decomposed (NFD); the backend's keyword fallback expects NFC.
+        let text = raw.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let wasResponding = isResponding
         cancelForeground(turn: turnID, markInterrupted: wasResponding)
@@ -668,7 +675,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
         let stderrReader = LineReader { line in
             // STT stage timings go to stderr so `tibo --transcribe` stdout stays transcript-only.
-            if line.hasPrefix("STAGE ") || line.hasPrefix("TIBO_STT ") {
+            if line.hasPrefix("STAGE ") || line.hasPrefix("TIBO_STT ") || line.hasPrefix("TIBO_JEV ") {
                 print("TIBO_BACKEND turn_id=\(id) \(line)")
             } else {
                 print("TIBO_BACKEND stderr_received turn_id=\(id)")
@@ -737,6 +744,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 let result = try JSONDecoder().decode(RouteResult.self, from: Data(payload.utf8))
                 summary = result.summary
                 if result.command == "coding_task" { task = transcript }
+                if result.command == "computer_use" { Self.ensureControlPermissions() }
                 if result.status == "approval_required" {
                     state = .approval
                     awaitingMore = false
@@ -768,7 +776,85 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 return
             }
             startAgent(prompt: prompt, turn: id)
+        } else if line.hasPrefix("TIBO_SCREEN_REQUEST ") {
+            let payload = line.dropFirst("TIBO_SCREEN_REQUEST ".count)
+            guard let request = try? JSONDecoder().decode(ScreenRequest.self, from: Data(payload.utf8)) else {
+                print("TIBO_SCREEN_REQUEST malformed JSON ignored")
+                return
+            }
+            readScreen(request, turn: id)
         }
+    }
+
+    /// The omp computer tool runs as Tibo's child, so macOS checks Tibo's own Screen Recording and
+    /// Accessibility grants. Ask when a control task is proposed, before the user confirms it.
+    private static func ensureControlPermissions() {
+        if !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
+        if !AXIsProcessTrusted() {
+            AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+        }
+    }
+
+    /// Read-only screen question: capture the main display, OCR it on device, then ask the current brain.
+    /// Vision turns also attach the screenshot; nothing on screen is clicked or typed.
+    private func readScreen(_ request: ScreenRequest, turn id: Int) {
+        guard CGPreflightScreenCaptureAccess() else {
+            CGRequestScreenCaptureAccess()
+            fail("Cần quyền Ghi màn hình: bật Tibo trong Cài đặt hệ thống › Quyền riêng tư, rồi mở lại Tibo.")
+            sendTts(text: "Tôi cần quyền ghi màn hình trước đã.", final: true, turn: id)
+            state = .listening
+            return
+        }
+        state = .processing
+        summary = "Đang xem màn hình…"
+        let app = NSWorkspace.shared.frontmostApplication
+        let windowTitle = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]])?
+            .first { ($0[kCGWindowOwnerPID as String] as? pid_t) == app?.processIdentifier && ($0[kCGWindowLayer as String] as? Int) == 0 }?[kCGWindowName as String] as? String
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tibo-screen-\(id).jpg")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let lines = Self.captureAndRecognize(to: url)
+            DispatchQueue.main.async {
+                guard let self, id == self.turnID else { try? FileManager.default.removeItem(at: url); return }
+                guard let lines else {
+                    self.fail("Không chụp được màn hình.")
+                    self.sendTts(text: self.summary, final: true, turn: id)
+                    return
+                }
+                // ponytail: 6000-char OCR cap keeps the prompt small; long pages lose their tail.
+                let text = String(lines.joined(separator: "\n").prefix(6000))
+                var prompt = "Người dùng hỏi về màn hình hiện tại: \(request.question)\n"
+                if let name = app?.localizedName { prompt += "Ứng dụng đang dùng: \(name)\(windowTitle.map { " — cửa sổ \"\($0)\"" } ?? "").\n" }
+                prompt += "Chữ đọc được trên màn hình (OCR, có thể sai, từ trên xuống):\n\(text.isEmpty ? "(không có chữ)" : text)"
+                if request.vision { prompt += "\nẢnh chụp màn hình được đính kèm." }
+                print("TIBO_SCREEN turn_id=\(id) vision=\(request.vision) ocr_lines=\(lines.count)")
+                self.startAgent(prompt: prompt, turn: id, image: request.vision ? url : nil)
+                if !request.vision { try? FileManager.default.removeItem(at: url) }
+            }
+        }
+    }
+
+    /// Main-display screenshot downscaled to 1600 px (JPEG at `url`) plus Vision OCR lines; nil if capture failed.
+    nonisolated private static func captureAndRecognize(to url: URL) -> [String]? {
+        let capture = Process()
+        capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        capture.arguments = ["-x", "-m", "-t", "jpg", url.path]
+        guard (try? capture.run()) != nil else { return nil }
+        capture.waitUntilExit()
+        guard capture.terminationStatus == 0,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 1600,
+              ] as CFDictionary),
+              let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil)
+        else { return nil }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["vi-VT", "en-US"]
+        try? VNImageRequestHandler(cgImage: image).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 
     private func executeNativeAction(_ action: NativeAction, turn id: Int) {
@@ -822,7 +908,9 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
-    private func startAgent(prompt: String, turn id: Int) {
+    /// `image` is attached for vision turns (pi/omp `@file`, codex `-i`) and deleted when the agent exits.
+    /// Claude Code runs with no tools here, so it only gets the OCR text already in `prompt`.
+    private func startAgent(prompt: String, turn id: Int, image: URL? = nil) {
         let agent = currentProfile.agent
         guard let executable = AgentCLI.resolve(agent) else {
             let text = "Chưa cài \(agent.title)."
@@ -850,13 +938,15 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 "--system-prompt", systemPrompt
             ]
         case .omp:
-            process.arguments = ["-p", "--mode=json", "--no-tools", "--system-prompt=\(systemPrompt)", prompt]
+            process.arguments = ["-p", "--mode=json", "--no-tools", "--system-prompt=\(systemPrompt)"]
+                + (image.map { ["@\($0.path)"] } ?? []) + [prompt]
         case .pi:
             let model = currentProfile.agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
             process.arguments = ["-p", "--mode", "json", "--no-tools", "--system-prompt", systemPrompt]
-                + (model.isEmpty ? [] : ["--model", model]) + [prompt]
+                + (model.isEmpty ? [] : ["--model", model]) + (image.map { ["@\($0.path)"] } ?? []) + [prompt]
         case .codex:
-            process.arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "\(systemPrompt)\n\n\(prompt)"]
+            process.arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only"]
+                + (image.map { ["-i", $0.path] } ?? []) + ["\(systemPrompt)\n\n\(prompt)"]
         }
         process.environment = AgentCLI.environment()
         process.standardOutput = output
@@ -893,6 +983,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 output.fileHandleForReading.readabilityHandler = nil
                 error.fileHandleForReading.readabilityHandler = nil
                 guard let self else { return }
+                if let image { try? FileManager.default.removeItem(at: image) }
                 if id == self.turnID {
                     self.finishAgent(turn: id, failed: process.terminationStatus != 0)
                     self.agentProcess = nil

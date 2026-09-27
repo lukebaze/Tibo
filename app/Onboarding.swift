@@ -581,12 +581,21 @@ private struct PermissionsPageView: View {
         VStack(alignment: .leading, spacing: 16) {
             PermissionRow(title: "Microphone", status: microphoneStatus) { AVCaptureDevice.requestAccess(for: .audio) { _ in Task { @MainActor in refresh += 1 } } }
             PermissionRow(title: "Nhận dạng giọng nói", status: speechStatus) { SFSpeechRecognizer.requestAuthorization { _ in Task { @MainActor in refresh += 1 } } }
+            // Neither API has a completion callback; the rows refresh when the user comes back from System Settings.
+            PermissionRow(title: "Ghi màn hình (đọc màn hình)", status: screenStatus) { CGRequestScreenCaptureAccess(); refresh += 1 }
+            PermissionRow(title: "Trợ năng (điều khiển máy)", status: accessibilityStatus) {
+                AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+                refresh += 1
+            }
             Divider()
             DoctorView()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh += 1 }
     }
     private var microphoneStatus: String { _ = refresh; switch AVCaptureDevice.authorizationStatus(for: .audio) { case .authorized: return "Đã cấp"; case .denied: return "Đã từ chối — mở Cài đặt hệ thống để cấp lại"; case .restricted: return "Bị giới hạn"; default: return "Chưa hỏi" } }
     private var speechStatus: String { _ = refresh; switch SFSpeechRecognizer.authorizationStatus() { case .authorized: return "Đã cấp"; case .denied: return "Đã từ chối — mở Cài đặt hệ thống để cấp lại"; case .restricted: return "Bị giới hạn"; default: return "Chưa hỏi" } }
+    private var screenStatus: String { _ = refresh; return CGPreflightScreenCaptureAccess() ? "Đã cấp" : "Chưa cấp — bật Tibo trong Cài đặt hệ thống, rồi mở lại Tibo" }
+    private var accessibilityStatus: String { _ = refresh; return AXIsProcessTrusted() ? "Đã cấp" : "Chưa cấp — bật Tibo trong Cài đặt hệ thống › Trợ năng" }
 }
 
 private struct DoctorView: View {
