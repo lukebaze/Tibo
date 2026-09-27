@@ -31,6 +31,8 @@ struct Args {
     route_test: bool,
     no_jev: bool,
     interrupted: bool,
+    /// The user addressed Tibo explicitly (typed, or tapped the mic): no wake word needed.
+    addressed: bool,
     prefix: Option<String>,
     language: Option<String>,
     prompt: Option<String>,
@@ -117,7 +119,7 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
         }
         _ => current,
     };
-    let wake_matched = detected_wake || args.prefix.is_some();
+    let wake_matched = detected_wake || args.prefix.is_some() || args.addressed;
     println!("TRANSCRIPT: {transcript}");
     if wake_matched {
         println!("WAKE");
@@ -353,6 +355,7 @@ fn parse_args() -> Result<Args, String> {
             "--route-test" => parsed.route_test = true,
             "--no-jev" => parsed.no_jev = true,
             "--interrupted" => parsed.interrupted = true,
+            "--addressed" => parsed.addressed = true,
             "--prefix-transcript" => parsed.prefix = Some(next(&mut args, "--prefix-transcript")?),
             "--language" => parsed.language = Some(next(&mut args, "--language")?),
             "--prompt" => parsed.prompt = Some(next(&mut args, "--prompt")?),

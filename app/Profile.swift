@@ -10,7 +10,7 @@ struct Profile: Codable, Equatable {
     }
 
     enum Agent: String, Codable, CaseIterable, Identifiable {
-        case claude, omp, codex, pi
+        case pi, claude, omp, codex
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -35,19 +35,59 @@ struct Profile: Codable, Equatable {
         var id: String { rawValue }
     }
 
+    /// wake: always listening for the assistant's name. smart: tap the mic, the turn ends when you stop talking.
+    /// startStop: tap to start, tap again to send.
+    enum VoiceMode: String, Codable, CaseIterable, Identifiable {
+        case wake, smart, startStop = "start_stop"
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .wake: "Gọi tên"
+            case .smart: "Bấm mic, ngừng nói là gửi"
+            case .startStop: "Bấm để bắt đầu, bấm lại để gửi"
+            }
+        }
+    }
+
+    enum NotchPosition: String, Codable, CaseIterable, Identifiable {
+        case left, center, right
+        var id: String { rawValue }
+        var title: String { switch self { case .left: "Trái"; case .center: "Giữa"; case .right: "Phải" } }
+    }
+
+    /// everyday: browsers wait 0.5 s and games/full-screen apps 0.8 s before hover opens the notch. quick: always instant.
+    enum NotchOpen: String, Codable, CaseIterable, Identifiable {
+        case everyday, quick
+        var id: String { rawValue }
+        var title: String { self == .everyday ? "Hằng ngày (trễ hơn trên trình duyệt, game)" : "Mở nhanh (luôn mở ngay)" }
+    }
+
     var onboarded = false
     var userName = ""
     var assistantName = "Tibo"
     /// Spoken forms that wake the assistant (besides `assistantName`), including voice-learned variants.
     var wakeWords: [String] = ["Ti bo"]
     var vocabulary: [Term] = []
-    var agent: Agent = .claude
+    var agent: Agent = .pi
+    /// `--model` for pi; empty = pi's own default. `qwen-token-plan/deepseek-v4.1-flash` returns empty replies.
+    var agentModel = "opencode-go/deepseek-v4.1-flash"
     var ttsEngine: TtsEngine = .kokoro
     /// Kokoro voicepack id (e.g. "ngoc_huyen") or a macOS `say -v` voice name (e.g. "Linh").
     var ttsVoice = "ngoc_huyen"
     var sttEngine: SttEngine = .whisper
     /// File name inside `ProfileStore.modelsDir`.
     var whisperModel = "ggml-large-v3-turbo-q5_0.bin"
+    var voiceMode: VoiceMode = .wake
+    /// Master switch for spoken replies.
+    var speakReplies = true
+    /// Also speak answers to typed requests (voice requests are always spoken while `speakReplies` is on).
+    var readEveryAnswer = true
+    var notchPosition: NotchPosition = .center
+    var notchOpen: NotchOpen = .everyday
+    /// Extra hover margin around the collapsed pill, in points.
+    var hoverMargin: Double = 6
+    /// Seconds the expanded notch stays open after the pointer leaves.
+    var collapseDelay: Double = 1.2
 }
 
 @MainActor
@@ -61,7 +101,13 @@ final class ProfileStore: ObservableObject {
     @Published var trainingActive = false
 
     init() {
-        if let data = try? Data(contentsOf: Self.url), let decoded = try? Self.decoder.decode(Profile.self, from: data) {
+        // Merge the file over the defaults so a profile written by an older build (missing newer keys)
+        // keeps its values instead of failing to decode and resetting onboarding.
+        let defaults = (try? JSONSerialization.jsonObject(with: Self.encoder.encode(Profile()))) as? [String: Any] ?? [:]
+        if let data = try? Data(contentsOf: Self.url),
+           let stored = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           let merged = try? JSONSerialization.data(withJSONObject: defaults.merging(stored) { $1 }),
+           let decoded = try? Self.decoder.decode(Profile.self, from: merged) {
             profile = decoded
         } else {
             profile = Profile()
@@ -121,4 +167,15 @@ enum AgentCLI {
         environment["PATH"] = (searchPath + [environment["PATH"] ?? ""]).joined(separator: ":")
         return environment
     }
+}
+
+extension Notification.Name {
+    /// object: String, a request to run as if typed into the notch.
+    static let tiboSubmit = Notification.Name("TiboSubmit")
+    /// A downloaded Whisper model is in place; restart whisper-server.
+    static let tiboModelReady = Notification.Name("TiboModelReady")
+    static let tiboNotchOpened = Notification.Name("TiboNotchOpened")
+    static let tiboWakeHeard = Notification.Name("TiboWakeHeard")
+    /// Flash the notch hover zone on screen for a few seconds.
+    static let tiboShowHoverZone = Notification.Name("TiboShowHoverZone")
 }

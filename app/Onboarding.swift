@@ -8,13 +8,14 @@ enum TiboWindows {
     private static var onboardingWindow: NSWindow?
     private static var settingsWindow: NSWindow?
 
-    static func showOnboarding(store: ProfileStore, onFinish: @escaping () -> Void) {
+    /// `startNotch` runs when onboarding reaches the try-it step (idempotent on the caller side).
+    static func showOnboarding(store: ProfileStore, startNotch: @escaping () -> Void, onFinish: @escaping () -> Void) {
         if let window = onboardingWindow {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let root = OnboardingView(store: store, onFinish: {
+        let root = OnboardingView(store: store, startNotch: startNotch, onFinish: {
             onboardingWindow?.close()
             onboardingWindow = nil
             onFinish()
@@ -65,7 +66,7 @@ private struct VoicePackInfo: Decodable {
 }
 
 private enum OnboardingPage: Int, CaseIterable, Identifiable {
-    case welcome, profile, assistant, training, agent, tts, stt, permissions, finish
+    case welcome, profile, assistant, training, agent, tts, stt, listen, notch, permissions, tryIt, finish
     var id: Int { rawValue }
     var title: String {
         switch self {
@@ -76,7 +77,10 @@ private enum OnboardingPage: Int, CaseIterable, Identifiable {
         case .agent: "Trợ lý AI"
         case .tts: "Giọng nói"
         case .stt: "Nhận dạng giọng nói"
+        case .listen: "Cách nghe và nói"
+        case .notch: "Notch"
         case .permissions: "Quyền truy cập"
+        case .tryIt: "Thử ngay"
         case .finish: "Hoàn tất"
         }
     }
@@ -84,14 +88,20 @@ private enum OnboardingPage: Int, CaseIterable, Identifiable {
 
 private struct OnboardingView: View {
     @ObservedObject private var store: ProfileStore
+    @ObservedObject private var downloader = ModelDownloader.shared
     @State private var draft: Profile
     @State private var page: OnboardingPage = .welcome
     @State private var errorMessage = ""
+    @State private var hovered = false
+    @State private var woke = false
+    @State private var sample = "Hôm nay là thứ mấy? Gợi ý cho tôi một cách dùng Tibo."
+    private let startNotch: () -> Void
     private let onFinish: () -> Void
 
-    init(store: ProfileStore, onFinish: @escaping () -> Void) {
+    init(store: ProfileStore, startNotch: @escaping () -> Void, onFinish: @escaping () -> Void) {
         _store = ObservedObject(wrappedValue: store)
         _draft = State(initialValue: store.profile)
+        self.startNotch = startNotch
         self.onFinish = onFinish
     }
 
@@ -126,9 +136,14 @@ private struct OnboardingView: View {
                     .disabled(page == .welcome)
                 Spacer()
                 if page == .finish {
-                    Button("Bắt đầu") { finish() }.buttonStyle(.borderedProminent)
+                    Button("Bắt đầu") { finish() }
+                    Button("Bắt đầu và gửi thử") { finish(); NotificationCenter.default.post(name: .tiboSubmit, object: sample) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(sample.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } else {
-                    Button("Tiếp") { next() }.buttonStyle(.borderedProminent)
+                    // Model downloads keep running while the user moves on; the button shows how far along they are.
+                    Button(downloader.active == nil ? "Tiếp" : "Tiếp · đang tải \(Int(downloader.progress * 100))%") { next() }
+                        .buttonStyle(.borderedProminent)
                 }
             }
             .padding(20)
@@ -153,7 +168,10 @@ private struct OnboardingView: View {
         case .agent: AgentPageView(draft: $draft)
         case .tts: TtsPageView(draft: $draft)
         case .stt: SttPageView(draft: $draft)
+        case .listen: ListenPageView(draft: $draft)
+        case .notch: NotchPageView(draft: $draft)
         case .permissions: PermissionsPageView(store: store)
+        case .tryIt: TryItPageView(draft: draft, hovered: $hovered, woke: $woke)
         case .finish: finishView
         }
     }
@@ -161,13 +179,19 @@ private struct OnboardingView: View {
     private var finishView: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Tibo đã sẵn sàng với lựa chọn của bạn.").font(.title3)
+            Text("Gửi thử một câu:")
+            TextField("Câu lệnh mẫu", text: $sample).textFieldStyle(.roundedBorder).padding(.bottom, 8)
             summaryRow("Tên bạn", draft.userName.isEmpty ? "Chưa đặt" : draft.userName)
             summaryRow("Trợ lý", draft.assistantName)
             summaryRow("Từ gọi", ([draft.assistantName] + draft.wakeWords).joined(separator: ", "))
             summaryRow("Từ vựng riêng", draft.vocabulary.isEmpty ? "Chưa có" : draft.vocabulary.map(\.word).joined(separator: ", "))
-            summaryRow("Trợ lý AI", draft.agent.title)
+            summaryRow("Trợ lý AI", draft.agent == .pi && !draft.agentModel.isEmpty ? "pi · \(draft.agentModel)" : draft.agent.title)
             summaryRow("Giọng nói", TtsPageView.voiceLabel(draft))
-            summaryRow("Nhận dạng", SttPageView.summary(draft))
+            summaryRow("Nhận dạng", SttPageView.summary(draft) + (downloader.active == nil ? "" : " (đang tải \(Int(downloader.progress * 100))%)"))
+            summaryRow("Microphone", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "Đã cấp quyền" : "Chưa cấp quyền")
+            summaryRow("Cách nghe", draft.voiceMode.title)
+            summaryRow("Trả lời bằng giọng", draft.speakReplies ? (draft.readEveryAnswer ? "Mọi câu" : "Khi hỏi bằng giọng") : "Tắt")
+            summaryRow("Vị trí notch", draft.notchPosition.title)
             Text("Bạn có thể thay đổi mọi lựa chọn trong Cài đặt.").foregroundStyle(.secondary).padding(.top, 8)
         }
     }
@@ -182,7 +206,13 @@ private struct OnboardingView: View {
             draft.wakeWords = draft.wakeWords.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
             if draft.assistantName.isEmpty { errorMessage = "Nhập tên trợ lý để tiếp tục."; return }
         }
+        if page == .tryIt && !hovered { errorMessage = "Đưa chuột lên notch ở đỉnh màn hình để tiếp tục."; return }
         page = OnboardingPage(rawValue: page.rawValue + 1) ?? .finish
+        if page == .tryIt {
+            // The live notch reads the stored profile, so persist the choices (still not onboarded) before starting it.
+            store.save(draft)
+            startNotch()
+        }
     }
 
     private func finish() {
@@ -256,6 +286,12 @@ private struct AgentPageView: View {
                     .accessibilityLabel("\(agent.title), \(path == nil ? "chưa cài" : "đã cài")")
                     .accessibilityAddTraits(selected ? .isSelected : [])
                     .accessibilityAction { if path != nil { draft.agent = agent } }
+                }
+            }
+            if draft.agent == .pi {
+                Section("Model của pi") {
+                    TextField("Model", text: $draft.agentModel, prompt: Text("opencode-go/deepseek-v4.1-flash"))
+                    Text("Để trống để dùng model mặc định của pi.").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }.formStyle(.grouped)
@@ -334,6 +370,7 @@ private struct TtsPageView: View {
 
 private struct SttPageView: View {
     @Binding var draft: Profile
+    @ObservedObject private var downloader = ModelDownloader.shared
 
     var body: some View {
         Form {
@@ -343,16 +380,54 @@ private struct SttPageView: View {
                         Text(Self.title(engine)).tag(engine).disabled(engine == .vietasr && !Self.vietASRAvailable)
                     }
                 }.pickerStyle(.radioGroup)
-                if draft.sttEngine == .whisper {
-                    Picker("Mô hình Whisper", selection: $draft.whisperModel) {
-                        ForEach(Self.whisperModels, id: \.name) { model in
-                            Text("\(model.label) · \(model.size)").tag(model.name)
+            }
+            if draft.sttEngine == .whisper {
+                Section("Mô hình Whisper") {
+                    let recommended = WhisperCatalog.recommended()
+                    ForEach(WhisperCatalog.entries) { entry in
+                        let path = WhisperCatalog.installed(entry)
+                        let selected = path != nil ? draft.whisperModel == path : draft.whisperModel.hasSuffix("/\(entry.file)")
+                        HStack {
+                            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                            VStack(alignment: .leading) {
+                                Text(entry.label + (entry.id == recommended.id ? " · Đề xuất cho máy này" : ""))
+                                Text(ByteCountFormatter.string(fromByteCount: entry.bytes, countStyle: .file) + (path == nil ? " · chưa tải" : " · đã có"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if downloader.active?.id == entry.id {
+                                ProgressView(value: downloader.progress).frame(width: 90)
+                            } else if path == nil {
+                                Button("Tải về") { download(entry) }.disabled(downloader.active != nil)
+                            }
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture { if let path { draft.whisperModel = path } }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
                     }
+                    Text(WhisperCatalog.machineSummary()).font(.caption).foregroundStyle(.secondary)
+                    if !downloader.error.isEmpty { Text(downloader.error).font(.caption).foregroundStyle(.red) }
                 }
             }
         }.formStyle(.grouped)
-        .onAppear { if !Self.vietASRAvailable && draft.sttEngine == .vietasr { draft.sttEngine = .whisper } }
+        .onAppear {
+            if !Self.vietASRAvailable && draft.sttEngine == .vietasr { draft.sttEngine = .whisper }
+            // Nothing usable installed: start the recommended model in the background right away.
+            let current = FileManager.default.fileExists(atPath: ProfileStore.modelsDir.appendingPathComponent(draft.whisperModel).path)
+            if draft.sttEngine == .whisper && !current && downloader.active == nil {
+                if let installed = WhisperCatalog.entries.lazy.compactMap(WhisperCatalog.installed).first {
+                    draft.whisperModel = installed
+                } else {
+                    download(WhisperCatalog.recommended())
+                }
+            }
+        }
+    }
+
+    private func download(_ entry: WhisperCatalog.Entry) {
+        downloader.download(entry) { draft.whisperModel = $0 }
     }
 
     static func title(_ engine: Profile.SttEngine) -> String {
@@ -365,22 +440,13 @@ private struct SttPageView: View {
 
     static func summary(_ profile: Profile) -> String {
         guard profile.sttEngine == .whisper else { return title(profile.sttEngine) }
-        let model = whisperModels.first { $0.name == profile.whisperModel }?.label ?? profile.whisperModel
+        let model = WhisperCatalog.entries.first { profile.whisperModel.hasSuffix($0.file) }?.label ?? profile.whisperModel
         return "Whisper · \(model)"
     }
 
     private static var vietASRAvailable: Bool {
         FileManager.default.fileExists(atPath: ProfileStore.modelsDir.appendingPathComponent("vietasr").path)
             && FileManager.default.fileExists(atPath: ProfileStore.dataDir.appendingPathComponent("asr-venv").path)
-    }
-
-    private static var whisperModels: [(name: String, label: String, size: String)] {
-        guard let files = try? FileManager.default.contentsOfDirectory(at: ProfileStore.modelsDir, includingPropertiesForKeys: [.fileSizeKey]) else { return [] }
-        return files.filter { $0.lastPathComponent.hasPrefix("ggml-") && $0.pathExtension == "bin" }.sorted { $0.lastPathComponent < $1.lastPathComponent }.map {
-            let bytes = (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-            return ($0.lastPathComponent, $0.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "ggml-", with: "").replacingOccurrences(of: "-", with: " ").capitalized, size)
-        }
     }
 }
 
@@ -510,21 +576,196 @@ private struct TrainingPageView: View {
 private struct PermissionsPageView: View {
     @ObservedObject private var store: ProfileStore
     @State private var refresh = 0
-    @State private var doctorOutput = ""
-    @State private var doctorRunning = false
     init(store: ProfileStore) { _store = ObservedObject(wrappedValue: store) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PermissionRow(title: "Microphone", status: microphoneStatus) { AVCaptureDevice.requestAccess(for: .audio) { _ in Task { @MainActor in refresh += 1 } } }
             PermissionRow(title: "Nhận dạng giọng nói", status: speechStatus) { SFSpeechRecognizer.requestAuthorization { _ in Task { @MainActor in refresh += 1 } } }
             Divider()
-            HStack { Button(doctorRunning ? "Đang kiểm tra…" : "Kiểm tra hệ thống") { runDoctor() }.disabled(doctorRunning); if doctorRunning { ProgressView().controlSize(.small) } }
-            if !doctorOutput.isEmpty { Text(doctorOutput).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+            DoctorView()
         }
     }
     private var microphoneStatus: String { _ = refresh; switch AVCaptureDevice.authorizationStatus(for: .audio) { case .authorized: return "Đã cấp"; case .denied: return "Đã từ chối — mở Cài đặt hệ thống để cấp lại"; case .restricted: return "Bị giới hạn"; default: return "Chưa hỏi" } }
     private var speechStatus: String { _ = refresh; switch SFSpeechRecognizer.authorizationStatus() { case .authorized: return "Đã cấp"; case .denied: return "Đã từ chối — mở Cài đặt hệ thống để cấp lại"; case .restricted: return "Bị giới hạn"; default: return "Chưa hỏi" } }
-    private func runDoctor() { doctorRunning = true; doctorOutput = ""; DispatchQueue.global(qos: .userInitiated).async { let output = TiboProcess.run(arguments: ["--doctor"], environment: AgentCLI.environment()); Task { @MainActor in doctorOutput = output; doctorRunning = false } } }
+}
+
+private struct DoctorView: View {
+    @State private var output = ""
+    @State private var running = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack { Button(running ? "Đang kiểm tra…" : "Kiểm tra hệ thống") { run() }.disabled(running); if running { ProgressView().controlSize(.small) } }
+            if !output.isEmpty { Text(output).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+        }
+    }
+    private func run() { running = true; output = ""; DispatchQueue.global(qos: .userInitiated).async { let result = TiboProcess.run(arguments: ["--doctor"], environment: AgentCLI.environment()); Task { @MainActor in output = result; running = false } } }
+}
+
+private struct ListenPageView: View {
+    @Binding var draft: Profile
+    var body: some View {
+        Form {
+            Section("Cách gọi \(draft.assistantName)") {
+                Picker("Cách gọi", selection: $draft.voiceMode) {
+                    ForEach(Profile.VoiceMode.allCases) { Text($0 == .wake ? "Gọi tên “\(draft.assistantName)”, luôn lắng nghe" : $0.title).tag($0) }
+                }.pickerStyle(.radioGroup).labelsHidden()
+                Text("Hai chế độ bấm mic dùng nút mic trên notch và không cần gọi tên.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Trả lời bằng giọng") {
+                Toggle("Cho \(draft.assistantName) nói", isOn: $draft.speakReplies)
+                Toggle("Đọc to mọi câu trả lời, kể cả khi hỏi bằng cách gõ", isOn: $draft.readEveryAnswer).disabled(!draft.speakReplies)
+                Text("Khi không đọc, câu trả lời hiện chữ trên notch.").font(.caption).foregroundStyle(.secondary)
+            }
+        }.formStyle(.grouped)
+    }
+}
+
+private struct NotchPageView: View {
+    @Binding var draft: Profile
+    var body: some View {
+        Form {
+            Section("Vị trí") {
+                Picker("Vị trí", selection: $draft.notchPosition) {
+                    ForEach(Profile.NotchPosition.allCases) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden()
+            }
+            Section("Cách mở khi rê chuột") {
+                Picker("Cách mở", selection: $draft.notchOpen) {
+                    ForEach(Profile.NotchOpen.allCases) { Text($0.title).tag($0) }
+                }.pickerStyle(.radioGroup).labelsHidden()
+            }
+            Section("Tinh chỉnh") {
+                LabeledContent("Nới vùng rê chuột: \(Int(draft.hoverMargin)) pt") { Slider(value: $draft.hoverMargin, in: 0...80, step: 2) }
+                LabeledContent(String(format: "Tự thu lại sau %.1f giây", draft.collapseDelay)) { Slider(value: $draft.collapseDelay, in: 0.3...5, step: 0.1) }
+                Button("Hiện vùng rê chuột") { NotificationCenter.default.post(name: .tiboShowHoverZone, object: nil) }
+                Text("Vùng hiện theo cài đặt đã lưu, trong 3 giây, khi notch đang chạy.").font(.caption).foregroundStyle(.secondary)
+            }
+        }.formStyle(.grouped)
+    }
+}
+
+/// Onboarding step that makes the user use the real notch once before finishing.
+private struct TryItPageView: View {
+    let draft: Profile
+    @Binding var hovered: Bool
+    @Binding var woke: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Làm thử một lần để chắc \(draft.assistantName) chạy đúng trên máy bạn.")
+            check(hovered, "Đưa chuột lên notch ở đỉnh màn hình")
+            check(woke, draft.voiceMode == .wake ? "Nói “\(draft.assistantName)” kèm một câu, ví dụ “\(draft.assistantName) ơi, mấy giờ rồi”" : "Bấm nút mic trên notch rồi nói một câu")
+            BuddyFace(mood: woke ? .happy : hovered ? .surprised : .idle, level: 0.5)
+                .frame(height: 120).frame(maxWidth: .infinity)
+                .accessibilityHidden(true)
+            if hovered && !woke { Text("Phần giọng nói có thể bỏ qua nếu bạn đang ở chỗ ồn.").font(.caption).foregroundStyle(.secondary) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .tiboNotchOpened)) { _ in hovered = true }
+        .onReceive(NotificationCenter.default.publisher(for: .tiboWakeHeard)) { _ in woke = true }
+    }
+    private func check(_ done: Bool, _ text: String) -> some View {
+        Label(text, systemImage: done ? "checkmark.circle.fill" : "circle")
+            .foregroundStyle(done ? Color.green : Color.primary)
+            .accessibilityLabel("\(text): \(done ? "xong" : "chưa")")
+    }
+}
+
+/// Whisper models fetched from ggerganov/whisper.cpp on Hugging Face (MIT), stored as
+/// `models/whisper-<variant>/<revision>/ggml-<variant>.bin` with a LICENSE next to it.
+@MainActor
+enum WhisperCatalog {
+    struct Entry: Identifiable {
+        let variant: String
+        let label: String
+        let bytes: Int64
+        var id: String { variant }
+        var file: String { "ggml-\(variant).bin" }
+    }
+
+    static let entries = [
+        Entry(variant: "base", label: "Base – nhẹ, kém chính xác", bytes: 147_951_465),
+        Entry(variant: "small", label: "Small – cân bằng", bytes: 487_601_967),
+        Entry(variant: "large-v3-turbo-q5_0", label: "Large v3 Turbo (nén) – chính xác nhất", bytes: 574_041_195),
+    ]
+
+    /// Models-relative path of an installed copy: the legacy flat file or any downloaded revision.
+    static func installed(_ entry: Entry) -> String? {
+        let fm = FileManager.default
+        let dir = ProfileStore.modelsDir
+        if fm.fileExists(atPath: dir.appendingPathComponent(entry.file).path) { return entry.file }
+        let base = "whisper-\(entry.variant)"
+        let revisions = (try? fm.contentsOfDirectory(atPath: dir.appendingPathComponent(base).path)) ?? []
+        return revisions.sorted().map { "\(base)/\($0)/\(entry.file)" }.first { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }
+    }
+
+    private static var ramGB: UInt64 { ProcessInfo.processInfo.physicalMemory >> 30 }
+    private static var freeGB: Int64 {
+        let values = try? FileManager.default.homeDirectoryForCurrentUser.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return (values?.volumeAvailableCapacityForImportantUsage ?? 0) >> 30
+    }
+
+    /// ponytail: RAM/disk thresholds are rough; large-v3-turbo needs ~1.5 GB resident, small ~0.8 GB.
+    static func recommended() -> Entry {
+        if ramGB >= 16 && freeGB >= 4 { return entries[2] }
+        if ramGB >= 8 && freeGB >= 2 { return entries[1] }
+        return entries[0]
+    }
+
+    static func machineSummary() -> String { "Máy có \(ramGB) GB RAM, ổ còn trống \(freeGB) GB." }
+}
+
+@MainActor
+final class ModelDownloader: NSObject, ObservableObject, URLSessionTaskDelegate {
+    static let shared = ModelDownloader()
+    @Published private(set) var active: WhisperCatalog.Entry?
+    @Published private(set) var progress = 0.0
+    @Published private(set) var error = ""
+    private var observation: NSKeyValueObservation?
+    private static let repo = "ggerganov/whisper.cpp"
+
+    /// Resolves the current repo revision, reports the final models-relative path through `onPath` (so the
+    /// profile can point at it before the bytes arrive), then downloads in the background and posts `.tiboModelReady`.
+    func download(_ entry: WhisperCatalog.Entry, onPath: @escaping (String) -> Void) {
+        guard active == nil else { return }
+        active = entry
+        progress = 0
+        error = ""
+        Task {
+            do {
+                let (meta, _) = try await URLSession.shared.data(from: URL(string: "https://huggingface.co/api/models/\(Self.repo)")!)
+                guard let sha = (try JSONSerialization.jsonObject(with: meta) as? [String: Any])?["sha"] as? String else { throw URLError(.badServerResponse) }
+                let relative = "whisper-\(entry.variant)/\(sha.prefix(7))/\(entry.file)"
+                onPath(relative)
+                let destination = ProfileStore.modelsDir.appendingPathComponent(relative)
+                let folder = destination.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let source = URL(string: "https://huggingface.co/\(Self.repo)/resolve/\(sha)/\(entry.file)")!
+                let (temp, response) = try await URLSession.shared.download(from: source, delegate: self)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.moveItem(at: temp, to: destination)
+                let mit = (try? await URLSession.shared.data(from: URL(string: "https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/LICENSE")!))
+                    .flatMap { String(data: $0.0, encoding: .utf8) } ?? "MIT License"
+                let notice = "\(entry.file): OpenAI Whisper weights converted to ggml by whisper.cpp.\nSource: \(source.absoluteString)\nLicense: MIT (model card of huggingface.co/\(Self.repo); weights MIT per github.com/openai/whisper).\n\n\(mit)"
+                try notice.write(to: folder.appendingPathComponent("LICENSE"), atomically: true, encoding: .utf8)
+                print("TIBO_MODEL downloaded \(relative)")
+                observation = nil
+                active = nil
+                NotificationCenter.default.post(name: .tiboModelReady, object: relative)
+            } catch {
+                self.error = "Tải \(entry.label) lỗi: \(error.localizedDescription)"
+                observation = nil
+                active = nil
+            }
+        }
+    }
+
+    nonisolated func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        let observation = task.progress.observe(\.fractionCompleted) { progress, _ in
+            let value = progress.fractionCompleted
+            Task { @MainActor in ModelDownloader.shared.progress = value }
+        }
+        Task { @MainActor in ModelDownloader.shared.observation = observation }
+    }
 }
 
 private struct RecognitionPair { let backend: String; let apple: String }
@@ -547,7 +788,7 @@ private struct SettingsRootView: View {
     var body: some View {
         HStack(spacing: 0) {
             List(selection: $selection) {
-                ForEach([OnboardingPage.profile, .assistant, .training, .agent, .tts, .stt, .permissions], id: \.self) { page in Text(page.title).tag(Optional(page)) }
+                ForEach([OnboardingPage.profile, .assistant, .training, .agent, .tts, .stt, .listen, .notch], id: \.self) { page in Text(page.title).tag(Optional(page)) }
                 Text("Nâng cao").tag(Optional<OnboardingPage>.none)
             }.frame(width: 180)
             Divider()
@@ -566,14 +807,20 @@ private struct SettingsRootView: View {
         case .some(.agent): AgentPageView(draft: $draft)
         case .some(.tts): TtsPageView(draft: $draft)
         case .some(.stt): SttPageView(draft: $draft)
+        case .some(.listen): ListenPageView(draft: $draft)
+        case .some(.notch): NotchPageView(draft: $draft)
         case .some(.training): TrainingPageView(draft: $draft, store: store)
-        case .some(.permissions): PermissionsPageView(store: store)
         case nil: advanced
         default: EmptyView()
         }
     }
 
-    private var advanced: some View { Form { Section("Nâng cao") { TextField("Project root", text: $projectRoot); SecureField("TypeSafe API key", text: $typesafeApiKey) } }.formStyle(.grouped) }
+    private var advanced: some View {
+        Form {
+            Section("Nâng cao") { TextField("Project root", text: $projectRoot); SecureField("TypeSafe API key", text: $typesafeApiKey) }
+            Section("Chẩn đoán") { DoctorView() }
+        }.formStyle(.grouped)
+    }
 }
 
 private final class OnboardingWavWriter {

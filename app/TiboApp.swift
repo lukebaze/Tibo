@@ -9,6 +9,7 @@ import Combine
 private enum VoiceState: String {
     case listening = "Đang nghe"
     case processing = "Đang xử lý"
+    case transcribing = "Đang chuyển thành chữ…"
     case speaking = "Đang nói"
     case approval = "Chờ xác nhận"
     case stopped = "Đã tắt mic"
@@ -122,6 +123,19 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     @Published var task = ""
     @Published var power: Float = -60
     @Published var micEnabled = true
+    /// A mic-button turn (smart / start-stop mode) is waiting for speech.
+    @Published private(set) var armed = false
+    /// Recording an utterance right now.
+    @Published private(set) var capturing = false
+    /// The current turn was addressed explicitly (typed or mic button), so no wake word is needed.
+    @Published private(set) var addressedTurn = false
+    /// Shown in the input placeholder instead of a spoken/caption error.
+    @Published private(set) var inputError: String?
+    /// Replies that were not spoken stay on screen for a while.
+    @Published private(set) var showAnswer = false
+    private var typedTurn = false
+    private var endRequested = false
+    private var observers: Set<AnyCancellable> = []
 
     private let store: ProfileStore
     private var currentProfile: Profile
@@ -198,6 +212,30 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             self?.profileChanged(profile)
         }
         requestPermissions()
+        NotificationCenter.default.publisher(for: .tiboSubmit).sink { [weak self] note in
+            if let text = note.object as? String { self?.submitTyped(text) }
+        }.store(in: &observers)
+        NotificationCenter.default.publisher(for: .tiboModelReady).sink { [weak self] _ in
+            guard let self, self.effectiveSttEngine == .whisper else { return }
+            self.stopWhisperServer()
+            self.startWhisperServer()
+        }.store(in: &observers)
+    }
+
+    var voiceMode: Profile.VoiceMode { currentProfile.voiceMode }
+
+    /// Mic button for smart / start-stop modes: first tap arms one turn, a tap while recording sends it.
+    func tapMic() {
+        if !micEnabled { toggleMicrophone() }
+        if writer != nil { endRequested = true; return }
+        if isResponding { stopPlayback() }
+        armed.toggle()
+        inputError = nil
+    }
+
+    /// Keeps the notch open for turns the user started on purpose.
+    var engaged: Bool {
+        armed || showAnswer || (addressedTurn && (capturing || state == .transcribing))
     }
 
     func toggleMicrophone() {
@@ -222,6 +260,27 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         summary = "Đã ngắt giọng nói"
     }
 
+    private func fail(_ message: String) {
+        summary = message
+        inputError = message
+        let id = turnID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            if self?.turnID == id, self?.inputError == message { self?.inputError = nil }
+        }
+    }
+
+    private var speaksThisTurn: Bool {
+        currentProfile.speakReplies && (!typedTurn || currentProfile.readEveryAnswer)
+    }
+
+    private func revealAnswer() {
+        showAnswer = true
+        let id = turnID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            if self?.turnID == id { self?.showAnswer = false }
+        }
+    }
+
     func submitTyped(_ raw: String) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -234,6 +293,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         silenceDuration = 0
         awaitingMore = false
         prefixTranscript = nil
+        addressedTurn = true
+        typedTurn = true
+        armed = false
+        inputError = nil
         turnID += 1
         turnStartedAt = Date()
         loggedFirstAudio = false
@@ -256,7 +319,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 guard granted else {
                     self.micEnabled = false
                     self.state = .stopped
-                    self.summary = "Microphone không được cấp quyền"
+                    self.fail("Microphone không được cấp quyền")
                     return
                 }
                 SFSpeechRecognizer.requestAuthorization { status in
@@ -277,7 +340,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
-            summary = "Không tìm thấy microphone"
+            fail("Không tìm thấy microphone")
             return
         }
         converter = AVAudioConverter(from: format, to: targetFormat)
@@ -300,7 +363,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             print("TIBO_MIC recorder_started sample_rate=16000 channels=1 metering=true")
             print("TIBO_MIC metering_started interval_ms=50")
         } catch {
-            summary = "Không thể mở microphone: \(error.localizedDescription)"
+            fail("Không thể mở microphone: \(error.localizedDescription)")
         }
     }
 
@@ -375,7 +438,9 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
         var startedNow = false
         let speechConfirmed = speechGate == nil || now.timeIntervalSince(lastSpeechAt) < 0.4
-        if writer == nil && speechConfirmed && now.timeIntervalSince(lastSustainedOnset) < 0.6 {
+        let mode = currentProfile.voiceMode
+        let tapStart = armed && mode == .startStop
+        if writer == nil && (mode == .wake || armed) && (tapStart || (speechConfirmed && now.timeIntervalSince(lastSustainedOnset) < 0.6)) {
             let prerollMs = Int(Double(preRollFrames) / targetFormat.sampleRate * 1000)
             let oldTurn = turnID
             let wasResponding = isResponding
@@ -385,6 +450,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             turnStartedAt = now
             loggedFirstAudio = false
             stateAfterPlayback = .listening
+            addressedTurn = mode != .wake
+            typedTurn = false
+            armed = false
+            inputError = nil
             do {
                 let newWriter = try WavWriter()
                 for buffered in preRoll { try newWriter.write(buffered) }
@@ -395,10 +464,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 preRoll.removeAll(keepingCapacity: true)
                 preRollFrames = 0
                 state = .listening
+                capturing = true
                 startedNow = true
                 print(String(format: "TIBO_MIC speech_started turn_id=%d threshold=%.1f noise=%.1f preroll_ms=%d", turnID, threshold, noiseFloor, prerollMs))
             } catch {
-                summary = "Không thể ghi âm: \(error.localizedDescription)"
+                fail("Không thể ghi âm: \(error.localizedDescription)")
                 return
             }
         }
@@ -410,8 +480,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 recordingDuration += duration
             }
             let silenceLimit = awaitingMore ? 1.2 : 0.65
-            if silenceDuration >= silenceLimit || recordingDuration >= 15 {
+            let silenceEnds = currentProfile.voiceMode != .startStop && silenceDuration >= silenceLimit
+            if endRequested || silenceEnds || recordingDuration >= (currentProfile.voiceMode == .startStop ? 60 : 15) {
                 self.writer = nil
+                capturing = false
+                endRequested = false
                 endedURL = writer.url
             }
         }
@@ -560,6 +633,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         recognitionRequest = nil
         summary = "Đang nhận dạng giọng nói…"
         submit(arguments: ["--voice", "--audio", url.path, "--emit-text"], mode: "voice", turn: id, capturedURL: url)
+        state = .transcribing
     }
 
     private func submit(arguments baseArguments: [String], mode: String, turn id: Int, capturedURL: URL?) {
@@ -573,6 +647,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         process.executableURL = Bundle.main.resourceURL?.appendingPathComponent("tibo")
         var arguments = baseArguments
         if interrupted { arguments.append("--interrupted") }
+        if addressedTurn { arguments.append("--addressed") }
         if let prefixTranscript { arguments += ["--prefix-transcript", prefixTranscript] }
         process.arguments = arguments
         var environment = backendEnvironment()
@@ -625,7 +700,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         } catch {
             backendRunning = false
             state = .listening
-            summary = "Không mở được backend: \(error.localizedDescription)"
+            fail("Không mở được backend: \(error.localizedDescription)")
         }
     }
 
@@ -633,8 +708,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         if line.hasPrefix("TRANSCRIPT: ") {
             transcript = String(line.dropFirst("TRANSCRIPT: ".count))
             print("TIBO_STT turn_id=\(id) text=\(transcript)")
+            if state == .transcribing { state = .processing }
+            if addressedTurn && transcript.isEmpty { fail("\(currentProfile.assistantName) chưa nghe rõ, thử lại nhé") }
         } else if line == "WAKE" {
             print("TIBO_BACKEND WAKE turn_id=\(id)")
+            NotificationCenter.default.post(name: .tiboWakeHeard, object: nil)
         } else if line.hasPrefix("STAGE ") {
             print("TIBO_BACKEND turn_id=\(id) \(line)")
             if line.hasPrefix("STAGE intent_done_ms=") {
@@ -645,6 +723,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             prefixTranscript = transcript
             summary = "Tôi đang nghe tiếp…"
             state = .listening
+            if currentProfile.voiceMode != .wake { armed = true }
         } else if line.hasPrefix("TIBO_NATIVE_ACTION ") {
             let payload = line.dropFirst("TIBO_NATIVE_ACTION ".count)
             guard let action = try? JSONDecoder().decode(NativeAction.self, from: Data(payload.utf8)) else {
@@ -773,7 +852,9 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         case .omp:
             process.arguments = ["-p", "--mode=json", "--no-tools", "--system-prompt=\(systemPrompt)", prompt]
         case .pi:
-            process.arguments = ["-p", "--mode", "json", "--no-tools", "--system-prompt", systemPrompt, prompt]
+            let model = currentProfile.agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            process.arguments = ["-p", "--mode", "json", "--no-tools", "--system-prompt", systemPrompt]
+                + (model.isEmpty ? [] : ["--model", model]) + [prompt]
         case .codex:
             process.arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "\(systemPrompt)\n\n\(prompt)"]
         }
@@ -825,7 +906,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             agentProcess = process
             print("TIBO_AGENT launch agent=\(agent.rawValue) turn_id=\(id)")
         } catch {
-            summary = "Tôi chưa thể trả lời lúc này."
+            fail("Tôi chưa thể trả lời lúc này.")
             sendTts(text: summary, final: true, turn: id)
             state = .listening
         }
@@ -900,7 +981,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         guard id == turnID, !llmFinalSent else { return }
         llmFinalSent = true
         if !llmReceivedText && failed {
-            summary = "Tôi chưa thể trả lời lúc này."
+            fail("Tôi chưa thể trả lời lúc này.")
             sendTts(text: summary, final: true, turn: id)
         } else {
             sendTts(text: "", final: true, turn: id)
@@ -939,7 +1020,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 guard let self, self.ttsProcess === process else { return }
                 self.ttsProcess = nil
                 self.ttsInput = nil
-                self.summary = "Kokoro không khả dụng"
+                self.fail("Kokoro không khả dụng")
             }
         }
         do {
@@ -948,7 +1029,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             ttsInput = input.fileHandleForWriting
             print("TIBO_TTS server_started")
         } catch {
-            summary = "Không mở được Kokoro: \(error.localizedDescription)"
+            fail("Không mở được Kokoro: \(error.localizedDescription)")
         }
     }
 
@@ -956,6 +1037,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         let previous = currentProfile
         currentProfile = next
         transcript = "Nói “\(next.assistantName)” để bắt đầu"
+        if next.voiceMode == .wake { armed = false }
         if previous.ttsEngine != next.ttsEngine || previous.ttsVoice != next.ttsVoice {
             stopTtsServer()
             startTtsServer()
@@ -1045,6 +1127,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         player = nil
         nextAudioSequence = 0
         ttsResponsePending = false
+        showAnswer = false
         nativeActionTurn = nil
         nativeActionFailedTurn = nil
         pendingNativeSay = nil
@@ -1063,8 +1146,15 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     }
 
     private func sendTts(text: String, final: Bool, turn id: Int) {
+        guard speaksThisTurn else {
+            if final {
+                revealAnswer()
+                if state != .approval { state = stateAfterPlayback }
+            }
+            return
+        }
         guard let ttsInput else {
-            summary = "Kokoro không khả dụng"
+            fail("Kokoro không khả dụng")
             return
         }
         let message: [String: Any] = ["type": "delta", "turn_id": id, "text": text, "final": final]
@@ -1074,7 +1164,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         do {
             try ttsInput.write(contentsOf: data)
         } catch {
-            summary = "Kokoro không khả dụng"
+            fail("Kokoro không khả dụng")
         }
     }
 
@@ -1100,7 +1190,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         } else if line.hasPrefix("TIBO_TTS_ERROR ") {
             let payload = line.dropFirst("TIBO_TTS_ERROR ".count)
             guard let event = try? JSONDecoder().decode(TtsErrorEvent.self, from: Data(payload.utf8)), event.turnID == turnID else { return }
-            summary = "Không tổng hợp được giọng nói: \(event.message)"
+            fail("Không tổng hợp được giọng nói: \(event.message)")
             state = .listening
             ttsResponsePending = false
         }
@@ -1117,7 +1207,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         } catch {
             try? FileManager.default.removeItem(at: url)
             nextAudioSequence += 1
-            summary = "Không phát được phản hồi"
+            fail("Không phát được phản hồi")
             playNext()
         }
     }
@@ -1163,16 +1253,25 @@ private final class NotchPanel: NSPanel {
 @MainActor
 private final class NotchController: ObservableObject {
     /// Window size: room for the tallest expanded state plus the settings window. The visible notch is drawn inside it.
-    static let panelSize = NSSize(width: 440, height: 320)
+    static let panelSize = NSSize(width: 440, height: 440)
     static let expandedWidth: CGFloat = 380
     @Published private(set) var expanded = false
     @Published private(set) var typing = false
     @Published private(set) var barHeight: CGFloat = 32
     @Published private(set) var pillWidth: CGFloat = 280
+    @Published private(set) var position: Profile.NotchPosition = .center
     let store: ProfileStore
     let voice: VoiceController
     private let panel = NotchPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     private var lastActive = Date.distantPast
+    private var hoverSince: Date?
+    private var hotRect = NSRect.zero
+    private var zoneWindow: NSWindow?
+    private var observers: Set<AnyCancellable> = []
+    private static let browsers: Set<String> = [
+        "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "com.microsoft.edgemac",
+        "company.thebrowser.Browser", "com.brave.Browser", "com.operasoftware.Opera", "com.vivaldi.Vivaldi", "app.zen-browser.zen",
+    ]
     private var timer: Timer?
     private var hotKey: EventHotKeyRef?
 
@@ -1193,6 +1292,7 @@ private final class NotchController: ObservableObject {
             MainActor.assumeIsolated { self?.tick() }
         }
         registerHotKey()
+        NotificationCenter.default.publisher(for: .tiboShowHoverZone).sink { [weak self] _ in self?.flashHoverZone() }.store(in: &observers)
     }
 
     func toggle() {
@@ -1218,28 +1318,71 @@ private final class NotchController: ObservableObject {
 
     private func tick() {
         let screen = NSScreen.main ?? NSScreen.screens[0]
+        let profile = store.profile
         let bar = max(24, screen.safeAreaInsets.top, screen.frame.maxY - screen.visibleFrame.maxY)
         var notch: CGFloat = 170
         if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
             notch = screen.frame.width - left.width - right.width
         }
+        // Off-centre there is no hardware notch to hug, so the pill only needs room for the face.
+        let pill = profile.notchPosition == .center ? notch + 110 : 150
         if barHeight != bar { barHeight = bar }
-        if pillWidth != notch + 110 { pillWidth = notch + 110 }
+        if pillWidth != pill { pillWidth = pill }
+        if position != profile.notchPosition { position = profile.notchPosition }
         if typing != panel.isKeyWindow { typing = panel.isKeyWindow }
         let top = screen.frame
         let size = Self.panelSize
-        let frame = NSRect(x: top.midX - size.width / 2, y: top.maxY - size.height, width: size.width, height: size.height)
+        let frame = NSRect(x: x(width: size.width, in: top), y: top.maxY - size.height, width: size.width, height: size.height)
         if panel.frame != frame { panel.setFrame(frame, display: true) }
 
-        let visible = expanded ? NSSize(width: Self.expandedWidth, height: barHeight + (typing ? 240 : 190)) : NSSize(width: pillWidth, height: barHeight)
-        let hot = NSRect(x: top.midX - visible.width / 2, y: top.maxY - visible.height, width: visible.width, height: visible.height).insetBy(dx: -6, dy: -6)
-        let hovering = hot.contains(NSEvent.mouseLocation)
-        let busy = voice.state == .processing || voice.state == .speaking || voice.state == .approval
+        let inputRow = typing || voice.inputError != nil || voice.voiceMode != .wake
+        let visible = expanded ? NSSize(width: Self.expandedWidth, height: barHeight + (typing ? 330 : inputRow ? 240 : 190)) : NSSize(width: pillWidth, height: barHeight)
+        let margin = CGFloat(profile.hoverMargin)
+        hotRect = NSRect(x: x(width: visible.width, in: top), y: top.maxY - visible.height, width: visible.width, height: visible.height).insetBy(dx: -margin, dy: -margin)
+        let hovering = hotRect.contains(NSEvent.mouseLocation)
+        if hovering { hoverSince = hoverSince ?? Date() } else { hoverSince = nil }
+        let busy = voice.state == .processing || voice.state == .speaking || voice.state == .approval || voice.engaged
         if hovering || busy || panel.isKeyWindow { lastActive = Date() }
-        if !expanded && (hovering || busy) {
+        if !expanded && (busy || (hoverSince.map { Date().timeIntervalSince($0) >= openDelay(screen) } ?? false)) {
             setExpanded(true)
-        } else if expanded && Date().timeIntervalSince(lastActive) > 1.2 {
+            if hovering && !busy { NotificationCenter.default.post(name: .tiboNotchOpened, object: nil) }
+        } else if expanded && Date().timeIntervalSince(lastActive) > profile.collapseDelay {
             setExpanded(false)
+        }
+    }
+
+    /// Panel/pill origin for the chosen position; side positions keep a small gap from the screen edge.
+    private func x(width: CGFloat, in top: NSRect) -> CGFloat {
+        switch position {
+        case .left: top.minX + 8
+        case .center: top.midX - width / 2
+        case .right: top.maxX - width - 8
+        }
+    }
+
+    /// Hover delay so passing the pointer through the menu bar does not pop the notch in apps where the top edge is busy.
+    private func openDelay(_ screen: NSScreen) -> TimeInterval {
+        guard store.profile.notchOpen == .everyday, let app = NSWorkspace.shared.frontmostApplication else { return 0 }
+        // ponytail: hidden menu bar ≈ full-screen app; also true with "auto-hide menu bar" on, which then always waits 0.8 s.
+        if screen.visibleFrame.maxY >= screen.frame.maxY - 1 { return 0.8 }
+        if let url = app.bundleURL, (Bundle(url: url)?.infoDictionary?["LSApplicationCategoryType"] as? String)?.hasSuffix("games") == true { return 0.8 }
+        if let id = app.bundleIdentifier, Self.browsers.contains(id) { return 0.5 }
+        return 0
+    }
+
+    private func flashHoverZone() {
+        zoneWindow?.orderOut(nil)
+        let window = NSWindow(contentRect: hotRect, styleMask: .borderless, backing: .buffered, defer: false)
+        window.level = .screenSaver
+        window.isOpaque = false
+        window.backgroundColor = NSColor.systemPink.withAlphaComponent(0.4)
+        window.ignoresMouseEvents = true
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.orderFrontRegardless()
+        zoneWindow = window
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            if self?.zoneWindow === window { window.orderOut(nil); self?.zoneWindow = nil }
         }
     }
 
@@ -1297,11 +1440,11 @@ private struct ContentView: View {
             Divider()
             Button("Thoát Tibo") { NSApp.terminate(nil) }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: notch.position == .left ? .topLeading : notch.position == .right ? .topTrailing : .top)
         .environment(\.colorScheme, .dark)
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: notch.expanded)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: notch.typing)
-        .animation(.easeInOut(duration: 0.2), value: showCaption)
+        .animation(.easeInOut(duration: 0.2), value: caption)
         .onChange(of: notch.typing) { _, typing in inputFocused = typing }
         .onChange(of: voice.state) { old, new in
             if old == .speaking && new != .speaking { react(.happy, for: 2.2) }
@@ -1328,31 +1471,30 @@ private struct ContentView: View {
                 .frame(width: 250, height: 128)
                 .accessibilityElement()
                 .accessibilityLabel("Tibo: \(voice.state.rawValue)")
-            if showCaption {
-                Text(voice.summary)
+            if let caption {
+                Text(caption)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.72))
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
+                    .lineLimit(voice.showAnswer ? 4 : 2)
                     .padding(.horizontal, 28)
                     .transition(.opacity)
             }
-            if notch.typing {
-                TextField("Hỏi Tibo…", text: $draft)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14, design: .rounded))
-                    .foregroundStyle(.white)
-                    .focused($inputFocused)
-                    .onSubmit {
-                        voice.submitTyped(draft)
-                        draft = ""
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.white.opacity(0.1), in: Capsule())
+            if showsInput {
+                inputRow
                     .padding(.horizontal, 22)
                     .transition(.move(edge: .top).combined(with: .opacity))
-                    .accessibilityLabel("Nhập yêu cầu")
+                ForEach(matches, id: \.name) { command in
+                    Button { run(command) } label: {
+                        HStack {
+                            Text(command.name).font(.system(size: 12, design: .monospaced)).foregroundStyle(.white.opacity(0.5))
+                            Text(command.label).foregroundStyle(.white)
+                            Spacer()
+                        }.contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 36)
+                }
             }
         }
         .padding(.top, notch.barHeight)
@@ -1360,8 +1502,81 @@ private struct ContentView: View {
         .onExitCommand { notch.collapse() }
     }
 
-    private var showCaption: Bool {
-        (voice.state == .speaking || voice.state == .approval) && !voice.summary.isEmpty
+    private var showsInput: Bool { notch.typing || voice.inputError != nil || voice.voiceMode != .wake }
+
+    /// Status line under the face: live listening hints first, then spoken/unspoken answers.
+    private var caption: String? {
+        if voice.capturing && voice.addressedTurn {
+            return voice.voiceMode == .startStop ? "Đang nghe… bấm mic để gửi" : "Đang nghe… ngừng nói để gửi"
+        }
+        if voice.armed { return "Mời bạn nói…" }
+        if voice.state == .transcribing && voice.addressedTurn { return voice.state.rawValue }
+        if (voice.state == .speaking || voice.state == .approval || voice.showAnswer) && !voice.summary.isEmpty { return voice.summary }
+        return nil
+    }
+
+    private var inputRow: some View {
+        HStack(spacing: 8) {
+            TextField("", text: $draft, prompt: Text(voice.inputError ?? "Hỏi \(notch.store.profile.assistantName) hoặc gõ /")
+                .foregroundStyle(voice.inputError == nil ? Color.white.opacity(0.4) : Color.red.opacity(0.85)))
+                .textFieldStyle(.plain)
+                .font(.system(size: 14, design: .rounded))
+                .foregroundStyle(.white)
+                .focused($inputFocused)
+                .onSubmit {
+                    if let command = matches.first { run(command); return }
+                    voice.submitTyped(draft)
+                    draft = ""
+                }
+                .accessibilityLabel(voice.inputError.map { "Lỗi: \($0). Nhập yêu cầu" } ?? "Nhập yêu cầu")
+            Button { draft = "/" ; inputFocused = true } label: { Image(systemName: "square.grid.2x2") }
+                .buttonStyle(.plain).foregroundStyle(.white.opacity(0.6))
+                .accessibilityLabel("Lệnh nhanh")
+            if voice.voiceMode != .wake {
+                Button(action: voice.tapMic) {
+                    Image(systemName: voice.capturing ? "stop.circle.fill" : "mic.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(voice.capturing || voice.armed ? Color.red : Color.white.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(voice.capturing ? "Gửi" : voice.armed ? "Huỷ nghe" : "Nói")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.white.opacity(0.1), in: Capsule())
+    }
+
+    private struct SlashCommand {
+        let name: String
+        let label: String
+        let run: @MainActor () -> Void
+    }
+
+    private var commands: [SlashCommand] {
+        let store = notch.store
+        return [
+            SlashCommand(name: "/caidat", label: "Mở Cài đặt") { notch.collapse(); TiboWindows.showSettings(store: store) },
+            SlashCommand(name: "/mic", label: voice.micEnabled ? "Tắt microphone" : "Bật microphone") { voice.toggleMicrophone() },
+            SlashCommand(name: "/dung", label: "Ngắt câu đang nói") { voice.stopPlayback() },
+            SlashCommand(name: "/giong", label: store.profile.speakReplies ? "Tắt giọng trả lời" : "Bật giọng trả lời") {
+                var profile = store.profile
+                profile.speakReplies.toggle()
+                store.save(profile)
+            },
+            SlashCommand(name: "/thoat", label: "Thoát") { NSApp.terminate(nil) },
+        ]
+    }
+
+    private var matches: [SlashCommand] {
+        let typed = draft.trimmingCharacters(in: .whitespaces).lowercased()
+        guard typed.hasPrefix("/") else { return [] }
+        return commands.filter { $0.name.hasPrefix(typed) }
+    }
+
+    private func run(_ command: SlashCommand) {
+        draft = ""
+        command.run()
     }
 
     private var level: CGFloat { max(0, min(1, CGFloat((voice.power + 60) / 60))) }
@@ -1370,7 +1585,7 @@ private struct ContentView: View {
         if let reaction { return reaction }
         switch voice.state {
         case .listening: return .idle
-        case .processing: return .thinking
+        case .processing, .transcribing: return .thinking
         case .speaking: return .talking
         case .approval: return .asking
         case .stopped: return .sleeping
@@ -1520,13 +1735,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         if store.profile.onboarded {
             notch = NotchController(store: store)
         } else {
-            TiboWindows.showOnboarding(store: store) { [weak self] in
-                guard let self else { return }
-                self.notch = NotchController(store: self.store)
-            }
+            TiboWindows.showOnboarding(store: store, startNotch: { [weak self] in self?.startNotch() }, onFinish: { [weak self] in self?.startNotch() })
         }
     }
-}
+
+    private func startNotch() {
+        if notch == nil { notch = NotchController(store: store) }
+        }
+    }
 
 @main
 struct TiboApp: App {
