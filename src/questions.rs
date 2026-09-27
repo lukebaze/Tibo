@@ -20,6 +20,7 @@ pub struct Turn {
 }
 
 pub fn build_state(turn: &Turn) -> Value {
+    let assistant_name = crate::profile::load().assistant_name;
     json!({
         "transcript": turn.transcript,
         "asr": {
@@ -27,7 +28,7 @@ pub fn build_state(turn: &Turn) -> Value {
             "wake_word_matched": turn.wake_matched
         },
         "assistant": {
-            "name": "Tibo",
+            "name": assistant_name,
             "was_speaking_when_user_spoke": turn.interrupted
         },
         "session": {
@@ -41,13 +42,14 @@ pub fn build_state(turn: &Turn) -> Value {
 }
 
 pub fn questions() -> Value {
+    let name = crate::profile::load().assistant_name;
     json!({
         "addressed_to_tibo": {
             "type": "noul",
-            "instructions": "The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant Tibo. Session context or an interruption can make an utterance addressed even without the wake word.",
+            "instructions": format!("The transcript may be Vietnamese or mixed Vietnamese-English and may contain ASR errors. Decide whether the user is speaking to the voice assistant {name}. Session context or an interruption can make an utterance addressed even without the wake word."),
             "criteria": {
-                "true": "The user is speaking to Tibo or controlling the active Tibo task.",
-                "false": "Background speech, another person, dictation, or self-talk not directed at Tibo."
+                "true": format!("The user is speaking to {name} or controlling the active {name} task."),
+                "false": "Background speech, another person, dictation, or self-talk not directed at the assistant."
             }
         },
         "semantic_complete": {
@@ -66,7 +68,7 @@ pub fn questions() -> Value {
                 "closed_command": "One fixed command: list/status OMP agents; review/audit the current diff with Claude; run/measure benchmark; validate/run Eva; delete/purge/dọn sạch all OMP sessions or session history. Examples: dọn sạch lịch sử phiên; trạng thái các tác tử omp; duyệt code tôi vừa sửa; đo benchmark tiếng việt.",
                 "coding_task": "An open-ended software task that changes or investigates source code, including implementing UI appearance. Examples: đổi màu nút chính sang xanh; sửa lỗi đăng nhập; thêm endpoint; refactor auth. Do not classify source-code UI changes as computer_use.",
                 "computer_use": "Operate the actual macOS application, browser, website, payment, or GUI outside source code. Examples: mở Safari; open Safari rồi vào GitHub; thanh toán hoá đơn. A missing website or app target such as vào trang rồi is unclear.",
-                "conversation": "Complete non-actionable conversation directed to Tibo.",
+                "conversation": format!("Complete non-actionable conversation directed to {name}."),
                 "unclear": "The action, object, or destination is missing, such as nhờ codex, chạy cái, mở giúp tôi cái, vào trang rồi."
             }
         },

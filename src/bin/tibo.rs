@@ -2,6 +2,7 @@ use tibo::{
     audio, handlers,
     jev::JevClient,
     policy,
+    profile,
     questions::{self, Thresholds, Turn},
     session, tts,
 };
@@ -23,6 +24,7 @@ struct Args {
     emit_text: bool,
     tts_server: bool,
     text: Option<String>,
+    transcribe: Option<PathBuf>,
     say: Option<String>,
     doctor: bool,
     smoke: bool,
@@ -59,6 +61,11 @@ fn run() -> Result<(), String> {
     if args.eval || args.eval_run {
         return legacy_eval(&args);
     }
+    if let Some(wav) = &args.transcribe {
+        audio::validate_wav(wav)?;
+        println!("{}", audio::transcribe(wav, None, None, None)?);
+        return Ok(());
+    }
     if let Some(text) = &args.say {
         return tts::output(text, args.emit_wav);
     }
@@ -90,7 +97,7 @@ fn run() -> Result<(), String> {
         text.clone()
     } else {
         return Err(
-            "use --voice, --text, --say, --tts-server, --doctor, --smoke, --route-test, or --eval"
+            "use --voice, --text, --transcribe, --say, --tts-server, --doctor, --smoke, --route-test, or --eval"
                 .into(),
         );
     };
@@ -98,6 +105,8 @@ fn run() -> Result<(), String> {
 }
 
 fn process_turn(raw: String, args: &Args) -> Result<(), String> {
+    let configured = profile::load();
+    let raw = profile::rewrite_vocabulary(&raw, &configured);
     let detected_wake = audio::wake_matched(&raw);
     let current = audio::strip_wake_word(&raw);
     let transcript = match args.prefix.as_deref() {
@@ -218,9 +227,10 @@ fn doctor() -> Result<(), String> {
             failures.push(name.to_string());
         }
     }
+    let configured = profile::load();
     let model = env::var("TIBO_WHISPER_MODEL")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| home().join(".local/share/tibo/models/ggml-large-v3-turbo-q5_0.bin"));
+        .unwrap_or_else(|_| home().join(".local/share/tibo/models").join(configured.whisper_model));
     if !model.is_file() {
         failures.push("whisper model".into());
     }
@@ -336,6 +346,7 @@ fn parse_args() -> Result<Args, String> {
             "--emit-text" => parsed.emit_text = true,
             "--tts-server" => parsed.tts_server = true,
             "--text" => parsed.text = Some(next(&mut args, "--text")?),
+            "--transcribe" => parsed.transcribe = Some(PathBuf::from(next(&mut args, "--transcribe")?)),
             "--say" => parsed.say = Some(next(&mut args, "--say")?),
             "--doctor" => parsed.doctor = true,
             "--smoke" => parsed.smoke = true,

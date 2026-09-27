@@ -4,6 +4,7 @@ import Carbon
 import SoundAnalysis
 import Speech
 import SwiftUI
+import Combine
 
 private enum VoiceState: String {
     case listening = "Đang nghe"
@@ -121,8 +122,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     @Published var task = ""
     @Published var power: Float = -60
     @Published var micEnabled = true
-    @Published var showSettings = false
 
+    private let store: ProfileStore
+    private var currentProfile: Profile
+    private var profileSubscription: AnyCancellable?
     private let engine = AVAudioEngine()
     private let audioQueue = DispatchQueue(label: "local.tibo.audio")
     private var converter: AVAudioConverter?
@@ -167,11 +170,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var queuedAudio: [Int: URL] = [:]
     private var nextAudioSequence = 0
     private var playingURL: URL?
-    private var claudeProcess: Process?
-    private var claudeReaders: [LineReader] = []
-    private var claudeReceivedText = false
-    private var claudeFinalSent = false
-    private var claudeStartedAt = Date.distantPast
+    private var agentProcess: Process?
+    private var agentReaders: [LineReader] = []
+    private var llmReceivedText = false
+    private var llmFinalSent = false
+    private var llmStartedAt = Date.distantPast
     private var turnStartedAt = Date.distantPast
     private var loggedFirstAudio = false
     private var ttsResponsePending = false
@@ -183,11 +186,17 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var whisperInput: FileHandle?
     private let whisperPort = 8177
 
-    override init() {
+    init(store: ProfileStore) {
+        self.store = store
+        self.currentProfile = store.profile
         super.init()
+        transcript = "Nói “\(currentProfile.assistantName)” để bắt đầu"
         loadTask()
         startTtsServer()
-        startWhisperServer()
+        if effectiveSttEngine == .whisper { startWhisperServer() }
+        profileSubscription = store.$profile.sink { [weak self] profile in
+            self?.profileChanged(profile)
+        }
         requestPermissions()
     }
 
@@ -234,7 +243,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
 
     private var isResponding: Bool {
         backendProcess?.isRunning == true
-            || claudeProcess?.isRunning == true
+            || agentProcess?.isRunning == true
             || player?.isPlaying == true
             || !queuedAudio.isEmpty
             || ttsResponsePending
@@ -323,6 +332,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private func consume(_ buffer: AVAudioPCMBuffer) {
         let db = rms(buffer)
         power = db
+        guard !store.trainingActive else { return }
         let now = Date()
         // ponytail: half-duplex. Built-in speakers reach the mic at -13…-18 dB, as loud as a real voice, so any
         // loudness threshold lets Tibo cut itself off with its own echo. Upgrade path: voice-processing AEC
@@ -414,13 +424,17 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             silenceDuration = 0
             utteranceEnded = true
             recognitionRequest?.endAudio()
-            // Whisper with the domain prompt is the final transcript; Apple Speech mangles
-            // "Tibo" and English terms ("agent" → "ai lớn"). Apple stays for live partials
-            // and as fallback when the server is down.
-            if whisperServer?.isRunning == true {
-                submitFallback(url, turn: id)
-            } else {
+            switch effectiveSttEngine {
+            case .apple:
                 finishRecognition(turn: id, fallbackURL: url)
+            case .vietasr:
+                submitFallback(url, turn: id)
+            case .whisper:
+                if whisperServer?.isRunning == true {
+                    submitFallback(url, turn: id)
+                } else {
+                    finishRecognition(turn: id, fallbackURL: url)
+                }
             }
         }
         if writer == nil && now.timeIntervalSince(lastOnset) >= 20 {
@@ -446,7 +460,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = false
-        request.contextualStrings = ["Tibo", "OMP", "Claude Code", "Codex", "Eva", "agent", "review", "benchmark", "commit", "diff", "Safari", "GitHub"]
+        var contextualStrings = [currentProfile.assistantName]
+        contextualStrings += currentProfile.wakeWords
+        contextualStrings += currentProfile.vocabulary.map(\.word)
+        contextualStrings += ["OMP", "Claude Code", "Codex", "Eva", "agent", "review", "benchmark", "commit", "diff", "Safari", "GitHub"]
+        request.contextualStrings = contextualStrings.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         recognitionRequest = request
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor in
@@ -557,11 +575,13 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         if interrupted { arguments.append("--interrupted") }
         if let prefixTranscript { arguments += ["--prefix-transcript", prefixTranscript] }
         process.arguments = arguments
-        var environment = ProcessInfo.processInfo.environment
+        var environment = backendEnvironment()
         let defaults = UserDefaults.standard
         environment["TIBO_PROJECT_ROOT"] = defaults.string(forKey: "projectRoot")?.nilIfEmpty ?? FileManager.default.homeDirectoryForCurrentUser.path
         if environment["TYPESAFE_API_KEY"] == nil, let key = defaults.string(forKey: "typesafeApiKey")?.nilIfEmpty { environment["TYPESAFE_API_KEY"] = key }
-        if whisperServer?.isRunning == true { environment["TIBO_WHISPER_URL"] = "http://127.0.0.1:\(whisperPort)/inference" }
+        if environment["TIBO_WHISPER_URL"] == nil, whisperServer?.isRunning == true {
+            environment["TIBO_WHISPER_URL"] = "http://127.0.0.1:\(whisperPort)/inference"
+        }
         process.environment = environment
         process.standardOutput = output
         process.standardError = error
@@ -571,8 +591,13 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 self.parseBackendLine(line, turn: id)
             }
         }
-        let stderrReader = LineReader { _ in
-            print("TIBO_BACKEND stderr_received turn_id=\(id)")
+        let stderrReader = LineReader { line in
+            // STT stage timings go to stderr so `tibo --transcribe` stdout stays transcript-only.
+            if line.hasPrefix("STAGE ") || line.hasPrefix("TIBO_STT ") {
+                print("TIBO_BACKEND turn_id=\(id) \(line)")
+            } else {
+                print("TIBO_BACKEND stderr_received turn_id=\(id)")
+            }
         }
         backendReaders = [stdoutReader, stderrReader]
         output.fileHandleForReading.readabilityHandler = { stdoutReader.feed($0.availableData) }
@@ -588,7 +613,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                     self.backendReaders.removeAll()
                     self.interrupted = false
                     print("TIBO_BACKEND exit turn_id=\(id) status=\(process.terminationStatus)")
-                    if self.state == .processing && self.claudeProcess == nil { self.state = .listening }
+                    if self.state == .processing && self.agentProcess == nil { self.state = .listening }
                 }
                 if let capturedURL { try? FileManager.default.removeItem(at: capturedURL) }
             }
@@ -663,7 +688,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 print("TIBO_LLM_REQUEST malformed JSON ignored")
                 return
             }
-            startClaude(prompt: prompt, turn: id)
+            startAgent(prompt: prompt, turn: id)
         }
     }
 
@@ -718,40 +743,68 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
-    private func startClaude(prompt: String, turn id: Int) {
+    private func startAgent(prompt: String, turn id: Int) {
+        let agent = currentProfile.agent
+        guard let executable = AgentCLI.resolve(agent) else {
+            let text = "Chưa cài \(agent.title)."
+            summary = text
+            sendTts(text: text, final: true, turn: id)
+            state = .listening
+            return
+        }
         let process = Process()
         let output = Pipe()
         let error = Pipe()
-        let fallback = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".nvm/versions/node/v26.2.0/bin/claude")
-        process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TIBO_CLAUDE"] ?? fallback.path)
-        process.arguments = [
-            "-p", prompt,
-            "--output-format", "stream-json",
-            "--verbose", // required by the CLI for stream-json in print mode; without it claude exits 1 with no text
-            "--include-partial-messages",
-            "--setting-sources", "local", // skip user hooks/plugins: they need `node` on PATH and add seconds per turn
-            "--permission-mode", "plan",
-            "--no-session-persistence",
-            "--tools", "",
-            "--system-prompt", "Bạn là Tibo, trợ lý giọng nói trên macOS. Trả lời bằng tiếng Việt tự nhiên, không Markdown, tối đa ba câu trừ khi người dùng yêu cầu chi tiết. Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng."
-        ]
+        let systemPrompt = llmSystemPrompt
+        process.executableURL = executable
+        switch agent {
+        case .claude:
+            process.arguments = [
+                "-p", prompt,
+                "--output-format", "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--setting-sources", "local",
+                "--permission-mode", "plan",
+                "--no-session-persistence",
+                "--tools", "",
+                "--system-prompt", systemPrompt
+            ]
+        case .omp:
+            process.arguments = ["-p", "--mode=json", "--no-tools", "--system-prompt=\(systemPrompt)", prompt]
+        case .pi:
+            process.arguments = ["-p", "--mode", "json", "--no-tools", "--system-prompt", systemPrompt, prompt]
+        case .codex:
+            process.arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "\(systemPrompt)\n\n\(prompt)"]
+        }
+        process.environment = AgentCLI.environment()
         process.standardOutput = output
         process.standardError = error
-        claudeReceivedText = false
-        claudeFinalSent = false
-        claudeStartedAt = Date()
+        llmReceivedText = false
+        llmFinalSent = false
+        llmStartedAt = Date()
         summary = ""
         state = .processing
         let stdoutReader = LineReader { [weak self] line in
             DispatchQueue.main.async {
                 guard let self, id == self.turnID else { return }
-                self.parseClaudeLine(line, turn: id)
+                switch agent {
+                case .claude:
+                    self.parseClaudeLine(line, turn: id)
+                case .omp, .pi:
+                    self.parseOmpLine(line, turn: id)
+                case .codex:
+                    self.parseCodexLine(line, turn: id)
+                }
             }
         }
-        let stderrReader = LineReader { _ in
-            print("TIBO_CLAUDE stderr_received turn_id=\(id)")
+        var stderrReported = false
+        let stderrReader = LineReader { line in
+            guard !line.isEmpty, !stderrReported else { return }
+            stderrReported = true
+            print("TIBO_AGENT stderr turn_id=\(id) \(line)")
         }
-        claudeReaders = [stdoutReader, stderrReader]
+        agentReaders = [stdoutReader, stderrReader]
         output.fileHandleForReading.readabilityHandler = { stdoutReader.feed($0.availableData) }
         error.fileHandleForReading.readabilityHandler = { stderrReader.feed($0.availableData) }
         process.terminationHandler = { [weak self] process in
@@ -760,22 +813,30 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 error.fileHandleForReading.readabilityHandler = nil
                 guard let self else { return }
                 if id == self.turnID {
-                    self.finishClaude(turn: id, failed: process.terminationStatus != 0)
-                    self.claudeProcess = nil
-                    self.claudeReaders.removeAll()
+                    self.finishAgent(turn: id, failed: process.terminationStatus != 0)
+                    self.agentProcess = nil
+                    self.agentReaders.removeAll()
                 }
-                print("TIBO_CLAUDE exit turn_id=\(id) status=\(process.terminationStatus)")
+                print("TIBO_AGENT exit agent=\(agent.rawValue) turn_id=\(id) status=\(process.terminationStatus)")
             }
         }
         do {
             try process.run()
-            claudeProcess = process
-            print("TIBO_CLAUDE launch turn_id=\(id)")
+            agentProcess = process
+            print("TIBO_AGENT launch agent=\(agent.rawValue) turn_id=\(id)")
         } catch {
             summary = "Tôi chưa thể trả lời lúc này."
             sendTts(text: summary, final: true, turn: id)
             state = .listening
         }
+    }
+
+    private var llmSystemPrompt: String {
+        let assistant = currentProfile.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var prompt = "Bạn là \(assistant.isEmpty ? "Tibo" : assistant), trợ lý giọng nói trên macOS. Trả lời bằng tiếng Việt tự nhiên, không Markdown, tối đa ba câu trừ khi người dùng yêu cầu chi tiết. Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng."
+        let user = currentProfile.userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !user.isEmpty { prompt += " Người dùng tên là \(user)." }
+        return prompt
     }
 
     private func parseClaudeLine(_ line: String, turn id: Int) {
@@ -789,30 +850,70 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
            event["type"] as? String == "content_block_delta",
            let delta = event["delta"] as? [String: Any],
            delta["type"] as? String == "text_delta",
-           let text = delta["text"] as? String,
-           !text.isEmpty {
-            if !claudeReceivedText {
-                claudeReceivedText = true
-                let ms = Int(Date().timeIntervalSince(claudeStartedAt) * 1000)
-                print("TIBO_LATENCY turn_id=\(id) llm_first_delta_ms=\(ms)")
-            }
-            summary += text
-            sendTts(text: text, final: false, turn: id)
+           let text = delta["text"] as? String {
+            emitAgentDelta(text, turn: id)
         } else if type == "result" {
-            finishClaude(turn: id, failed: false)
+            finishAgent(turn: id, failed: false)
         }
     }
 
-    private func finishClaude(turn id: Int, failed: Bool) {
-        guard id == turnID, !claudeFinalSent else { return }
-        claudeFinalSent = true
-        if !claudeReceivedText && failed {
+    private func parseOmpLine(_ line: String, turn id: Int) {
+        guard
+            let data = line.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let type = object["type"] as? String
+        else { return }
+        if type == "message_update",
+           let event = object["assistantMessageEvent"] as? [String: Any],
+           event["type"] as? String == "text_delta",
+           let text = event["delta"] as? String {
+            emitAgentDelta(text, turn: id)
+        } else if type == "agent_end" {
+            finishAgent(turn: id, failed: false)
+        }
+    }
+
+    private func parseCodexLine(_ line: String, turn id: Int) {
+        guard
+            let data = line.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            object["type"] as? String == "item.completed",
+            let item = object["item"] as? [String: Any],
+            item["type"] as? String == "agent_message",
+            let text = item["text"] as? String
+        else { return }
+        emitAgentDelta(text, turn: id)
+    }
+
+    private func emitAgentDelta(_ text: String, turn id: Int) {
+        guard id == turnID, !text.isEmpty else { return }
+        if !llmReceivedText {
+            llmReceivedText = true
+            let ms = Int(Date().timeIntervalSince(llmStartedAt) * 1000)
+            print("TIBO_LATENCY turn_id=\(id) llm_first_delta_ms=\(ms)")
+        }
+        summary += text
+        sendTts(text: text, final: false, turn: id)
+    }
+
+    private func finishAgent(turn id: Int, failed: Bool) {
+        guard id == turnID, !llmFinalSent else { return }
+        llmFinalSent = true
+        if !llmReceivedText && failed {
             summary = "Tôi chưa thể trả lời lúc này."
             sendTts(text: summary, final: true, turn: id)
         } else {
             sendTts(text: "", final: true, turn: id)
-            if !claudeReceivedText { state = .listening }
+            if !llmReceivedText { state = .listening }
         }
+    }
+
+    private var effectiveSttEngine: Profile.SttEngine {
+        guard let raw = ProcessInfo.processInfo.environment["TIBO_ASR_BACKEND"],
+              let engine = Profile.SttEngine(rawValue: raw) else {
+            return currentProfile.sttEngine
+        }
+        return engine
     }
 
     private func startTtsServer() {
@@ -825,6 +926,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         process.standardInput = input
         process.standardOutput = output
         process.standardError = error
+        process.environment = backendEnvironment()
         let stdoutReader = LineReader { [weak self] line in
             DispatchQueue.main.async { self?.parseTtsLine(line) }
         }
@@ -850,13 +952,56 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
+    private func profileChanged(_ next: Profile) {
+        let previous = currentProfile
+        currentProfile = next
+        transcript = "Nói “\(next.assistantName)” để bắt đầu"
+        if previous.ttsEngine != next.ttsEngine || previous.ttsVoice != next.ttsVoice {
+            stopTtsServer()
+            startTtsServer()
+        }
+        if previous.sttEngine != next.sttEngine || previous.whisperModel != next.whisperModel {
+            stopWhisperServer()
+            if effectiveSttEngine == .whisper { startWhisperServer() }
+        }
+    }
+
+    private func backendEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        if environment["TIBO_TTS_ENGINE"] == nil { environment["TIBO_TTS_ENGINE"] = currentProfile.ttsEngine.rawValue }
+        if environment["TIBO_TTS_VOICE"] == nil { environment["TIBO_TTS_VOICE"] = currentProfile.ttsVoice }
+        if environment["TIBO_ASR_BACKEND"] == nil, effectiveSttEngine != .apple {
+            environment["TIBO_ASR_BACKEND"] = effectiveSttEngine.rawValue
+        }
+        if environment["TIBO_WHISPER_MODEL"] == nil {
+            environment["TIBO_WHISPER_MODEL"] = ProfileStore.modelsDir.appendingPathComponent(currentProfile.whisperModel).path
+        }
+        return environment
+    }
+
+    private func stopTtsServer() {
+        ttsInput?.closeFile()
+        ttsInput = nil
+        ttsProcess?.terminate()
+        ttsProcess = nil
+        ttsReaders.removeAll()
+    }
+
+    private func stopWhisperServer() {
+        whisperInput?.closeFile()
+        whisperInput = nil
+        whisperServer?.terminate()
+        whisperServer = nil
+    }
+
     /// Resident whisper-server keeps the model loaded: ~1.4 s per utterance vs ~3 s for a
     /// cold whisper-cli run. The backend posts to it via TIBO_WHISPER_URL.
     private func startWhisperServer() {
+        guard effectiveSttEngine == .whisper else { return }
         let environment = ProcessInfo.processInfo.environment
         let server = environment["TIBO_WHISPER_SERVER"] ?? "/opt/homebrew/bin/whisper-server"
         let model = environment["TIBO_WHISPER_MODEL"]
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/tibo/models/ggml-large-v3-turbo-q5_0.bin").path
+            ?? ProfileStore.modelsDir.appendingPathComponent(currentProfile.whisperModel).path
         let process = Process()
         let input = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -888,8 +1033,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         backendProcess?.terminate()
         backendProcess = nil
         backendRunning = false
-        claudeProcess?.terminate()
-        claudeProcess = nil
+        agentProcess?.terminate()
+        agentProcess = nil
         sendTtsCancel(turn: oldID)
         queuedAudio.values.forEach { try? FileManager.default.removeItem(at: $0) }
         queuedAudio.removeAll()
@@ -1017,20 +1162,23 @@ private final class NotchPanel: NSPanel {
 
 @MainActor
 private final class NotchController: ObservableObject {
-    /// Window size: room for the tallest expanded state plus the settings sheet. The visible notch is drawn inside it.
+    /// Window size: room for the tallest expanded state plus the settings window. The visible notch is drawn inside it.
     static let panelSize = NSSize(width: 440, height: 320)
     static let expandedWidth: CGFloat = 380
     @Published private(set) var expanded = false
     @Published private(set) var typing = false
     @Published private(set) var barHeight: CGFloat = 32
     @Published private(set) var pillWidth: CGFloat = 280
-    let voice = VoiceController()
+    let store: ProfileStore
+    let voice: VoiceController
     private let panel = NotchPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     private var lastActive = Date.distantPast
     private var timer: Timer?
     private var hotKey: EventHotKeyRef?
 
-    init() {
+    init(store: ProfileStore) {
+        self.store = store
+        voice = VoiceController(store: store)
         panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -1087,7 +1235,7 @@ private final class NotchController: ObservableObject {
         let hot = NSRect(x: top.midX - visible.width / 2, y: top.maxY - visible.height, width: visible.width, height: visible.height).insetBy(dx: -6, dy: -6)
         let hovering = hot.contains(NSEvent.mouseLocation)
         let busy = voice.state == .processing || voice.state == .speaking || voice.state == .approval
-        if hovering || busy || voice.showSettings || panel.isKeyWindow { lastActive = Date() }
+        if hovering || busy || panel.isKeyWindow { lastActive = Date() }
         if !expanded && (hovering || busy) {
             setExpanded(true)
         } else if expanded && Date().timeIntervalSince(lastActive) > 1.2 {
@@ -1142,7 +1290,10 @@ private struct ContentView: View {
         .contextMenu {
             Button(voice.micEnabled ? "Tắt microphone" : "Bật microphone", action: voice.toggleMicrophone)
             Button("Ngắt giọng nói", action: voice.stopPlayback)
-            Button("Cài đặt…") { voice.showSettings = true }
+            Button("Cài đặt…") {
+                notch.collapse()
+                TiboWindows.showSettings(store: notch.store)
+            }
             Divider()
             Button("Thoát Tibo") { NSApp.terminate(nil) }
         }
@@ -1151,7 +1302,6 @@ private struct ContentView: View {
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: notch.expanded)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: notch.typing)
         .animation(.easeInOut(duration: 0.2), value: showCaption)
-        .sheet(isPresented: $voice.showSettings) { SettingsView() }
         .onChange(of: notch.typing) { _, typing in inputFocused = typing }
         .onChange(of: voice.state) { old, new in
             if old == .speaking && new != .speaking { react(.happy, for: 2.2) }
@@ -1360,33 +1510,26 @@ private final class FaceClip {
     }
 }
 
-private struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
-    @AppStorage("projectRoot") private var projectRoot = FileManager.default.homeDirectoryForCurrentUser.path
-    @AppStorage("typesafeApiKey") private var typesafeApiKey = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Cài đặt").font(.title2.bold())
-            TextField("Thư mục dự án", text: $projectRoot).textFieldStyle(.roundedBorder).accessibilityLabel("Thư mục dự án")
-            SecureField("TypeSafe API key", text: $typesafeApiKey).textFieldStyle(.roundedBorder).accessibilityLabel("TypeSafe API key")
-            HStack { Spacer(); Button("Xong") { dismiss() }.keyboardShortcut(.defaultAction) }
-        }
-        .padding(24).frame(width: 420)
-    }
-}
-
+@MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let store = ProfileStore()
     private var notch: NotchController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        notch = NotchController()
+        if store.profile.onboarded {
+            notch = NotchController(store: store)
+        } else {
+            TiboWindows.showOnboarding(store: store) { [weak self] in
+                guard let self else { return }
+                self.notch = NotchController(store: self.store)
+            }
+        }
     }
 }
 
 @main
 struct TiboApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    var body: some Scene { Settings { SettingsView() } }
+    var body: some Scene { Settings { EmptyView() } }
 }

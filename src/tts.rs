@@ -16,19 +16,46 @@ use std::{
 
 const BRIDGE: &str = include_str!("../scripts/kokoro_vi_bridge.py");
 
+enum TtsBackend {
+    Kokoro {
+        child: Child,
+        stdin: ChildStdin,
+        lines: Receiver<String>,
+    },
+    System {
+        voice: String,
+    },
+}
+
 pub struct TtsEngine {
-    child: Child,
-    stdin: ChildStdin,
-    lines: Receiver<String>,
+    backend: TtsBackend,
 }
 
 impl TtsEngine {
     pub fn start() -> Result<Self, String> {
-        let voice = env::var("TIBO_TTS_VOICE").unwrap_or_else(|_| "ngoc_huyen".into());
-        Self::start_with_voice(&voice)
+        let profile = crate::profile::load();
+        let voice = env::var("TIBO_TTS_VOICE").unwrap_or(profile.tts_voice);
+        Self::start_with_engine(&voice, &env::var("TIBO_TTS_ENGINE").unwrap_or(profile.tts_engine))
     }
 
     pub fn start_with_voice(voice: &str) -> Result<Self, String> {
+        let engine = env::var("TIBO_TTS_ENGINE")
+            .unwrap_or_else(|_| crate::profile::load().tts_engine);
+        Self::start_with_engine(voice, &engine)
+    }
+
+    fn start_with_engine(voice: &str, engine: &str) -> Result<Self, String> {
+        if engine == "system" {
+            return Ok(Self {
+                backend: TtsBackend::System {
+                    voice: voice.into(),
+                },
+            });
+        }
+        Self::start_kokoro(voice)
+    }
+
+    fn start_kokoro(voice: &str) -> Result<Self, String> {
         let script = env::temp_dir().join(format!("tibo-kokoro-{}.py", std::process::id()));
         fs::write(&script, BRIDGE).map_err(|e| e.to_string())?;
         let python = env::var("TIBO_TTS_PYTHON").unwrap_or_else(|_| {
@@ -49,7 +76,7 @@ impl TtsEngine {
             .args([
                 "--server",
                 "--voice",
-                &voice,
+                voice,
                 "--model-dir",
                 &model_dir,
                 "--speed",
@@ -76,9 +103,11 @@ impl TtsEngine {
             Ok(line) if line == "READY" => {
                 eprintln!("STAGE tts_init_done_ms={}", elapsed_ms());
                 Ok(Self {
-                    child,
-                    stdin,
-                    lines,
+                    backend: TtsBackend::Kokoro {
+                        child,
+                        stdin,
+                        lines,
+                    },
                 })
             }
             Ok(line) => Err(format!("unexpected TTS response: {line}")),
@@ -87,25 +116,51 @@ impl TtsEngine {
     }
 
     pub fn synthesize(&mut self, text: &str) -> Result<PathBuf, String> {
-        let wav = temp_wav("tts");
-        writeln!(self.stdin, "{}\t{}", hex(text.as_bytes()), wav.display())
-            .map_err(|e| e.to_string())?;
-        self.stdin.flush().map_err(|e| e.to_string())?;
-        match self.lines.recv_timeout(Duration::from_secs(60)) {
-            Ok(line) if line == "OK" => {
-                eprintln!("STAGE tts_synthesis_done_ms={}", elapsed_ms());
-                Ok(wav)
+        match &mut self.backend {
+            TtsBackend::System { voice } => {
+                let wav = temp_wav("tts");
+                let status = Command::new("/usr/bin/say")
+                    .args([
+                        "-v",
+                        voice,
+                        "-o",
+                        &wav.display().to_string(),
+                        "--file-format=WAVE",
+                        "--data-format=LEI16@24000",
+                        text,
+                    ])
+                    .status()
+                    .map_err(|e| e.to_string())?;
+                if status.success() {
+                    Ok(wav)
+                } else {
+                    Err(format!("say exited with {status}"))
+                }
             }
-            Ok(line) if line.starts_with("ERR ") => Err(decode_error(&line[4..])),
-            Ok(line) => Err(format!("unexpected TTS response: {line}")),
-            Err(_) => Err("TTS synthesis timed out".into()),
+            TtsBackend::Kokoro { stdin, lines, .. } => {
+                let wav = temp_wav("tts");
+                writeln!(stdin, "{}\t{}", hex(text.as_bytes()), wav.display())
+                    .map_err(|e| e.to_string())?;
+                stdin.flush().map_err(|e| e.to_string())?;
+                match lines.recv_timeout(Duration::from_secs(60)) {
+                    Ok(line) if line == "OK" => {
+                        eprintln!("STAGE tts_synthesis_done_ms={}", elapsed_ms());
+                        Ok(wav)
+                    }
+                    Ok(line) if line.starts_with("ERR ") => Err(decode_error(&line[4..])),
+                    Ok(line) => Err(format!("unexpected TTS response: {line}")),
+                    Err(_) => Err("TTS synthesis timed out".into()),
+                }
+            }
         }
     }
 }
 
 impl Drop for TtsEngine {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        if let TtsBackend::Kokoro { child, .. } = &mut self.backend {
+            let _ = child.kill();
+        }
     }
 }
 

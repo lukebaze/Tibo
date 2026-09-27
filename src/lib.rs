@@ -3,5 +3,6 @@ pub mod handlers;
 pub mod jev;
 pub mod policy;
 pub mod questions;
+pub mod profile;
 pub mod session;
 pub mod tts;

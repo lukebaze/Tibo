@@ -21,7 +21,20 @@ const APP_CSS: &str = include_str!("../../web/app.css");
 const APP_JS: &str = include_str!("../../web/app.js");
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024;
-const SYSTEM_PROMPT: &str = "Bạn là Tibo, trợ lý giọng nói trên macOS. Trả lời bằng tiếng Việt tự nhiên, không Markdown, tối đa ba câu trừ khi người dùng yêu cầu chi tiết. Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng.";
+fn system_prompt() -> String {
+    let profile = tibo::profile::load();
+    let name = if profile.assistant_name.trim().is_empty() {
+        "Tibo"
+    } else {
+        profile.assistant_name.as_str()
+    };
+    let user = if profile.user_name.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" Người dùng tên là {}.", profile.user_name.trim())
+    };
+    format!("Bạn là {name}, trợ lý giọng nói trên macOS.{user} Trả lời bằng tiếng Việt tự nhiên, không Markdown, tối đa ba câu trừ khi người dùng yêu cầu chi tiết. Không tuyên bố đã thao tác trên máy; thao tác được xử lý bởi nhánh computer-use riêng.")
+}
 
 #[derive(Deserialize)]
 struct TurnRequest {
@@ -394,7 +407,8 @@ fn execute_turn(turn: TurnRequest, state: &Arc<AppState>, writer: &EventWriter) 
     let backend = env::var_os("TIBO_BACKEND")
         .map(PathBuf::from)
         .unwrap_or_else(|| sibling_executable("tibo"));
-    let transcript = addressed_transcript(turn.transcript.trim());
+    let configured = tibo::profile::load();
+    let transcript = addressed_transcript(turn.transcript.trim(), &configured.assistant_name);
     let mut command = Command::new(backend);
     command.args(["--text", &transcript, "--emit-text"]);
     if turn.interrupted {
@@ -494,7 +508,7 @@ fn execute_turn(turn: TurnRequest, state: &Arc<AppState>, writer: &EventWriter) 
     if !status.is_ok_and(|status| status.success()) {
         writer.send(WebEvent::Error {
             code: "backend_failed".into(),
-            message: "The Tibo backend exited before completing the turn".into(),
+            message: "The assistant backend exited before completing the turn".into(),
         });
         writer.send(WebEvent::Done { exit_code });
         return;
@@ -532,7 +546,7 @@ fn stream_claude(prompt: String, state: &Arc<AppState>, writer: &EventWriter) {
         "--tools",
         "",
         "--system-prompt",
-        SYSTEM_PROMPT,
+        &system_prompt(),
     ]);
     let running = match start_process(&mut command, "claude", state, writer) {
         Ok(running) => running,
@@ -802,11 +816,16 @@ fn authorized(request: &Request, state: &AppState) -> bool {
     token_valid && origin_valid
 }
 
-fn addressed_transcript(transcript: &str) -> String {
+fn addressed_transcript(transcript: &str, assistant_name: &str) -> String {
     if tibo::audio::wake_matched(transcript) {
         transcript.into()
     } else {
-        format!("Tibo {transcript}")
+        let name = if assistant_name.trim().is_empty() {
+            "Tibo"
+        } else {
+            assistant_name.trim()
+        };
+        format!("{name} {transcript}")
     }
 }
 
@@ -962,8 +981,11 @@ mod tests {
 
     #[test]
     fn web_turns_are_addressed_without_duplicating_the_wake_word() {
-        assert_eq!(addressed_transcript("mở Safari"), "Tibo mở Safari");
-        assert_eq!(addressed_transcript("Tibo mở Safari"), "Tibo mở Safari");
+        assert_eq!(addressed_transcript("mở Safari", "Tibo"), "Tibo mở Safari");
+        assert_eq!(
+            addressed_transcript("Tibo mở Safari", "Tibo"),
+            "Tibo mở Safari"
+        );
     }
 
     #[test]

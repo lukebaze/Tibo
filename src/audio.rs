@@ -1,4 +1,4 @@
-use crate::policy::normalize;
+use crate::{policy::normalize, profile};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -54,9 +54,10 @@ pub fn transcribe(
     language: Option<&str>,
     prompt: Option<&str>,
 ) -> Result<String, String> {
-    let backend = env::var("TIBO_ASR_BACKEND").unwrap_or_else(|_| "whisper".into());
-    if model.is_some() || backend == "whisper" {
-        return transcribe_whisper(wav, model, language, prompt);
+    let configured = profile::load();
+    let backend = env::var("TIBO_ASR_BACKEND").unwrap_or_else(|_| configured.stt_engine.clone());
+    if model.is_some() || backend == "whisper" || backend == "apple" {
+        return transcribe_whisper(wav, model, language, prompt, &configured);
     }
     if backend != "vietasr" {
         return Err(format!("unsupported ASR backend: {backend}"));
@@ -65,11 +66,11 @@ pub fn transcribe(
         Ok(text) if !text.is_empty() => Ok(text),
         Ok(_) => {
             eprintln!("TIBO_STT vietasr returned empty transcript; falling back to whisper");
-            transcribe_whisper(wav, None, language, prompt)
+            transcribe_whisper(wav, None, language, prompt, &configured)
         }
         Err(error) => {
             eprintln!("TIBO_STT vietasr failed: {error}; falling back to whisper");
-            transcribe_whisper(wav, None, language, prompt)
+            transcribe_whisper(wav, None, language, prompt, &configured)
         }
     }
 }
@@ -90,7 +91,7 @@ fn transcribe_vietasr(wav: &Path) -> Result<String, String> {
     let threads = env::var("TIBO_VIETASR_THREADS").unwrap_or_else(|_| "4".into());
     let script = env::temp_dir().join(format!("tibo-vietasr-{}.py", std::process::id()));
     fs::write(&script, VIETASR_BRIDGE).map_err(|e| e.to_string())?;
-    println!("STAGE vietasr_start_ms={}", elapsed_ms());
+    eprintln!("STAGE vietasr_start_ms={}", elapsed_ms());
     eprintln!("TIBO_STT backend=vietasr model=int8");
     let output = Command::new(python)
         .arg(&script)
@@ -99,7 +100,7 @@ fn transcribe_vietasr(wav: &Path) -> Result<String, String> {
         .output()
         .map_err(|e| e.to_string())?;
     let _ = fs::remove_file(script);
-    println!("STAGE vietasr_done_ms={}", elapsed_ms());
+    eprintln!("STAGE vietasr_done_ms={}", elapsed_ms());
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -111,6 +112,7 @@ fn transcribe_whisper(
     model: Option<&Path>,
     language: Option<&str>,
     prompt: Option<&str>,
+    configured: &profile::Profile,
 ) -> Result<String, String> {
     let explicit_model = model.is_some();
     let whisper =
@@ -118,19 +120,42 @@ fn transcribe_whisper(
     let model = model
         .map(Path::to_path_buf)
         .or_else(|| env::var_os("TIBO_WHISPER_MODEL").map(PathBuf::from))
-        .unwrap_or_else(|| home().join(".local/share/tibo/models/ggml-large-v3-turbo-q5_0.bin"));
+        .unwrap_or_else(|| home().join(".local/share/tibo/models").join(&configured.whisper_model));
     let language = language
         .map(str::to_owned)
         .or_else(|| env::var("TIBO_WHISPER_LANGUAGE").ok())
         .unwrap_or_else(|| "vi".into());
-    let prompt = prompt.map(str::to_owned).or_else(|| env::var("TIBO_WHISPER_PROMPT").ok()).unwrap_or_else(|| "Tibo ơi, liệt kê các agent OMP. Tibo, nhờ Claude Code review thay đổi. Chạy Codex, chạy benchmark, đánh giá Eva. Dừng lại, tiếp tục, xác nhận, huỷ.".into());
-    println!("STAGE whisper_start_ms={}", elapsed_ms());
+    let assistant = if configured.assistant_name.trim().is_empty() {
+        "Tibo"
+    } else {
+        configured.assistant_name.as_str()
+    };
+    let vocabulary = configured
+        .vocabulary
+        .iter()
+        .map(|term| term.word.trim())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let default_prompt = format!(
+        "{assistant} ơi, liệt kê các agent OMP. {assistant}, nhờ Claude Code review thay đổi. Chạy Codex, chạy benchmark, đánh giá Eva. Dừng lại, tiếp tục, xác nhận, huỷ.{vocabulary_suffix}",
+        vocabulary_suffix = if vocabulary.is_empty() {
+            String::new()
+        } else {
+            format!(" Từ vựng: {vocabulary}.")
+        }
+    );
+    let prompt = prompt
+        .map(str::to_owned)
+        .or_else(|| env::var("TIBO_WHISPER_PROMPT").ok())
+        .unwrap_or(default_prompt);
+    eprintln!("STAGE whisper_start_ms={}", elapsed_ms());
     // The app runs a resident whisper-server (same model); an explicit --model means "use this file".
     if let (Ok(url), false) = (env::var("TIBO_WHISPER_URL"), explicit_model) {
         match transcribe_whisper_server(&url, wav, &language, &prompt) {
             Ok(text) => {
                 eprintln!("TIBO_STT backend=whisper-server language={language}");
-                println!("STAGE whisper_done_ms={}", elapsed_ms());
+                eprintln!("STAGE whisper_done_ms={}", elapsed_ms());
                 return Ok(text);
             }
             Err(error) => eprintln!("TIBO_STT whisper-server failed: {error}; using whisper-cli"),
@@ -153,7 +178,7 @@ fn transcribe_whisper(
         .arg(wav)
         .output()
         .map_err(|e| e.to_string())?;
-    println!("STAGE whisper_done_ms={}", elapsed_ms());
+    eprintln!("STAGE whisper_done_ms={}", elapsed_ms());
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -189,27 +214,73 @@ fn transcribe_whisper_server(url: &str, wav: &Path, language: &str, prompt: &str
     Ok(text.trim().to_string())
 }
 
-/// Whisper hears the name as "Tibo", "Tibor", "Ti bo", "Tì bò", often with trailing
-/// punctuation. Returns how many leading (normalized) words spell it.
-fn wake_len(words: &[&str]) -> usize {
-    let bare = |word: &str| word.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
-    match words {
-        [one, ..] if bare(one).starts_with("tibo") => 1,
-        [ti, bo, ..] if bare(ti) == "ti" && bare(bo) == "bo" => 2,
-        _ => 0,
+/// Matches configured wake phrases after normalization.
+fn wake_len(words: &[&str], phrases: &[String]) -> usize {
+    fn bare(word: &str) -> &str {
+        word.trim_matches(|c: char| !c.is_alphanumeric())
     }
+    let words = words
+        .iter()
+        .map(|word| bare(word))
+        .collect::<Vec<_>>();
+    phrases
+        .iter()
+        .filter_map(|phrase| {
+            let normalized_phrase = normalize(phrase);
+            let phrase_words = normalized_phrase
+                .split_whitespace()
+                .map(bare)
+                .filter(|word| !word.is_empty())
+                .collect::<Vec<_>>();
+            if phrase_words.is_empty() || phrase_words.len() > words.len() {
+                return None;
+            }
+            let matches = phrase_words.iter().zip(&words).all(|(expected, actual)| {
+                if phrase_words.len() == 1 {
+                    actual.starts_with(expected)
+                } else {
+                    actual == expected
+                }
+            });
+            matches.then_some(phrase_words.len())
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn wake_phrases(configured: &profile::Profile) -> Vec<String> {
+    std::iter::once(configured.assistant_name.clone())
+        .chain(configured.wake_words.iter().cloned())
+        .collect()
+}
+
+fn wake_matched_with_phrases(transcript: &str, phrases: &[String]) -> bool {
+    let text = normalize(transcript);
+    let words: Vec<&str> = text.split_whitespace().collect();
+    (0..words.len()).any(|start| wake_len(&words[start..], phrases) > 0)
+}
+
+fn strip_wake_word_with_phrases(transcript: &str, phrases: &[String]) -> String {
+    let normalized = normalize(transcript);
+    let words = normalized.split_whitespace().collect::<Vec<_>>();
+    let count = wake_len(&words, phrases);
+    transcript
+        .split_whitespace()
+        .skip(count)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn wake_matched(transcript: &str) -> bool {
-    let text = normalize(transcript);
-    let words: Vec<&str> = text.split_whitespace().collect();
-    (0..words.len()).any(|start| wake_len(&words[start..]) > 0)
+    wake_matched_with_phrases(transcript, &wake_phrases(&profile::load()))
 }
 
 pub fn strip_wake_word(transcript: &str) -> String {
-    let normalized = normalize(transcript);
-    let count = wake_len(&normalized.split_whitespace().collect::<Vec<_>>());
-    transcript.split_whitespace().skip(count).collect::<Vec<_>>().join(" ")
+    strip_wake_word_with_phrases(transcript, &wake_phrases(&profile::load()))
+}
+
+fn home() -> PathBuf {
+    PathBuf::from(env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
 }
 
 pub fn temp_wav(label: &str) -> PathBuf {
@@ -229,9 +300,6 @@ pub fn validate_wav(path: &Path) -> Result<(), String> {
     }
 }
 
-fn home() -> PathBuf {
-    PathBuf::from(env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
-}
 
 #[cfg(test)]
 mod tests {
@@ -240,18 +308,34 @@ mod tests {
     #[test]
     fn whisper_spellings_of_tibo_wake_and_strip() {
         // Observed Whisper large-v3-turbo outputs for spoken "Tibo".
+        let phrases = vec!["Tibo".into(), "Ti bo".into()];
         for (raw, rest) in [
             ("Ti bo ơi, liệt kê các agent đang chạy.", "ơi, liệt kê các agent đang chạy."),
             ("Tibo, chạy benchmark tiếng Việt.", "chạy benchmark tiếng Việt."),
             ("Tibor nhớ Cloud review thay đổi.", "nhớ Cloud review thay đổi."),
             ("Tì bò ơi", "ơi"),
         ] {
-            assert!(wake_matched(raw), "{raw}");
-            assert_eq!(strip_wake_word(raw), rest);
+            assert!(wake_matched_with_phrases(raw, &phrases), "{raw}");
+            assert_eq!(strip_wake_word_with_phrases(raw, &phrases), rest);
         }
-        assert!(wake_matched("Này Ti Bo, dừng lại!"));
-        assert_eq!(strip_wake_word("Này Ti Bo, dừng lại!"), "Này Ti Bo, dừng lại!");
-        assert!(!wake_matched("Dừng lại, tiếp tục."));
-        assert_eq!(strip_wake_word("Dừng lại."), "Dừng lại.");
+        assert!(wake_matched_with_phrases("Này Ti Bo, dừng lại!", &phrases));
+        assert_eq!(
+            strip_wake_word_with_phrases("Này Ti Bo, dừng lại!", &phrases),
+            "Này Ti Bo, dừng lại!"
+        );
+        assert!(!wake_matched_with_phrases("Dừng lại, tiếp tục.", &phrases));
+        assert_eq!(
+            strip_wake_word_with_phrases("Dừng lại.", &phrases),
+            "Dừng lại."
+        );
+    }
+    #[test]
+    fn custom_name_and_multiword_wake_variant_match() {
+        let phrases = vec!["Mi".into(), "mi mi".into()];
+        assert!(wake_matched_with_phrases("Mi mi, mở Safari", &phrases));
+        assert_eq!(
+            strip_wake_word_with_phrases("Mi mi, mở Safari", &phrases),
+            "mở Safari"
+        );
     }
 }
