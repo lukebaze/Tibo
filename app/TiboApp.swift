@@ -1254,7 +1254,7 @@ private final class NotchPanel: NSPanel {
 private final class NotchController: ObservableObject {
     /// Window size: room for the tallest expanded state plus the settings window. The visible notch is drawn inside it.
     static let panelSize = NSSize(width: 440, height: 440)
-    static let expandedWidth: CGFloat = 380
+    static let expandedWidth: CGFloat = 300
     @Published private(set) var expanded = false
     @Published private(set) var typing = false
     @Published private(set) var barHeight: CGFloat = 32
@@ -1325,7 +1325,7 @@ private final class NotchController: ObservableObject {
             notch = screen.frame.width - left.width - right.width
         }
         // Off-centre there is no hardware notch to hug, so the pill only needs room for the face.
-        let pill = profile.notchPosition == .center ? notch + 110 : 150
+        let pill = profile.notchPosition == .center ? notch + 80 : 100
         if barHeight != bar { barHeight = bar }
         if pillWidth != pill { pillWidth = pill }
         if position != profile.notchPosition { position = profile.notchPosition }
@@ -1336,7 +1336,7 @@ private final class NotchController: ObservableObject {
         if panel.frame != frame { panel.setFrame(frame, display: true) }
 
         let inputRow = typing || voice.inputError != nil || voice.voiceMode != .wake
-        let visible = expanded ? NSSize(width: Self.expandedWidth, height: barHeight + (typing ? 330 : inputRow ? 240 : 190)) : NSSize(width: pillWidth, height: barHeight)
+        let visible = expanded ? NSSize(width: Self.expandedWidth, height: barHeight + (typing ? 296 : inputRow ? 206 : 156)) : NSSize(width: pillWidth, height: barHeight)
         let margin = CGFloat(profile.hoverMargin)
         hotRect = NSRect(x: x(width: visible.width, in: top), y: top.maxY - visible.height, width: visible.width, height: visible.height).insetBy(dx: -margin, dy: -margin)
         let hovering = hotRect.contains(NSEvent.mouseLocation)
@@ -1423,7 +1423,7 @@ private struct ContentView: View {
     @State private var reactionID = 0
 
     var body: some View {
-        let shape = NotchShape(radius: notch.expanded ? 32 : 12)
+        let shape = NotchShape(radius: notch.expanded ? 24 : 10)
         ZStack(alignment: .top) {
             if notch.expanded { expandedView.transition(.opacity) } else { collapsedView.transition(.opacity) }
         }
@@ -1456,10 +1456,10 @@ private struct ContentView: View {
 
     private var collapsedView: some View {
         HStack(spacing: 0) {
-            BuddyFace(mood: mood, level: level).frame(width: notch.barHeight * 1.25, height: notch.barHeight * 0.62)
+            BuddyFace(mood: mood, level: level).frame(width: notch.barHeight * 0.9, height: notch.barHeight * 0.56)
             Spacer(minLength: 0)
         }
-        .padding(.leading, 12)
+        .padding(.leading, 4)
         .frame(height: notch.barHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Tibo: \(voice.state.rawValue)")
@@ -1468,7 +1468,7 @@ private struct ContentView: View {
     private var expandedView: some View {
         VStack(spacing: 6) {
             BuddyFace(mood: mood, level: level)
-                .frame(width: 250, height: 128)
+                .frame(width: 190, height: 100)
                 .accessibilityElement()
                 .accessibilityLabel("Tibo: \(voice.state.rawValue)")
             if let caption {
@@ -1477,12 +1477,12 @@ private struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.72))
                     .multilineTextAlignment(.center)
                     .lineLimit(voice.showAnswer ? 4 : 2)
-                    .padding(.horizontal, 28)
+                    .padding(.horizontal, 20)
                     .transition(.opacity)
             }
             if showsInput {
                 inputRow
-                    .padding(.horizontal, 22)
+                    .padding(.horizontal, 16)
                     .transition(.move(edge: .top).combined(with: .opacity))
                 ForEach(matches, id: \.name) { command in
                     Button { run(command) } label: {
@@ -1493,12 +1493,12 @@ private struct ContentView: View {
                         }.contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 36)
+                    .padding(.horizontal, 26)
                 }
             }
         }
         .padding(.top, notch.barHeight)
-        .padding(.bottom, 18)
+        .padding(.bottom, 12)
         .onExitCommand { notch.collapse() }
     }
 
