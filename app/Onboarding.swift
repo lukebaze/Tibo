@@ -72,19 +72,17 @@ private struct VoicePackInfo: Decodable {
 }
 
 private enum OnboardingPage: Int, CaseIterable, Identifiable {
-    case welcome, profile, assistant, training, agent, tts, stt, listen, notch, permissions, tryIt, finish
+    case welcome, profile, assistant, agent, tts, stt, listen, permissions, tryIt, finish
     var id: Int { rawValue }
     var title: String {
         switch self {
         case .welcome: "Chào mừng"
         case .profile: "Hồ sơ"
         case .assistant: "Tên gọi"
-        case .training: "Luyện giọng"
         case .agent: "Bộ não AI"
         case .tts: "Giọng nói"
         case .stt: "Nhận dạng giọng nói"
-        case .listen: "Cách nghe và nói"
-        case .notch: "Notch"
+        case .listen: "Nghe, nói và notch"
         case .permissions: "Quyền truy cập"
         case .tryIt: "Thử ngay"
         case .finish: "Hoàn tất"
@@ -95,12 +93,10 @@ private enum OnboardingPage: Int, CaseIterable, Identifiable {
         switch self {
         case .profile: "person.crop.circle"
         case .assistant: "character.bubble"
-        case .training: "waveform"
         case .agent: "brain"
         case .tts: "speaker.wave.2"
         case .stt: "mic"
         case .listen: "ear"
-        case .notch: "rectangle.topthird.inset.filled"
         default: "circle"
         }
     }
@@ -157,9 +153,7 @@ private struct OnboardingView: View {
                 Spacer()
                 if page == .finish {
                     Button("Bắt đầu") { finish() }
-                    Button("Bắt đầu và gửi thử") { finish(); NotificationCenter.default.post(name: .tiboSubmit, object: sample) }
                         .buttonStyle(.borderedProminent)
-                        .disabled(sample.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } else {
                     // Model downloads keep running while the user moves on; the button shows how far along they are.
                     Button(downloader.active == nil ? "Tiếp" : "Tiếp · đang tải \(Int(downloader.progress * 100))%") { next() }
@@ -184,13 +178,11 @@ private struct OnboardingView: View {
                     .multilineTextAlignment(.center).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity)
         case .profile: ProfilePageView(draft: $draft)
-        case .assistant: AssistantPageView(draft: $draft)
-        case .training: TrainingPageView(draft: $draft, store: store)
+        case .assistant: AssistantPageView(draft: $draft, store: store)
         case .agent: AgentPageView(draft: $draft)
         case .tts: TtsPageView(draft: $draft)
         case .stt: SttPageView(draft: $draft)
         case .listen: ListenPageView(draft: $draft)
-        case .notch: NotchPageView(draft: $draft)
         case .permissions: PermissionsPageView(store: store)
         case .tryIt: TryItPageView(draft: draft, hovered: $hovered, woke: $woke)
         case .finish: finishView
@@ -199,22 +191,18 @@ private struct OnboardingView: View {
 
     private var finishView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Tibo đã sẵn sàng với lựa chọn của bạn.").font(.title3)
-            Text("Gửi thử một câu:")
-            TextField("Câu lệnh mẫu", text: $sample).textFieldStyle(.roundedBorder).padding(.bottom, 8)
-            summaryRow("Tên bạn", draft.userName.isEmpty ? "Chưa đặt" : draft.userName)
-            summaryRow("Trợ lý", draft.assistantName)
-            summaryRow("Từ gọi", ([draft.assistantName] + draft.wakeWords).joined(separator: ", "))
-            summaryRow("Từ vựng riêng", draft.vocabulary.isEmpty ? "Chưa có" : draft.vocabulary.map(\.word).joined(separator: ", "))
+            Text("\(draft.assistantName) đã sẵn sàng.").font(.title3.weight(.semibold))
+            Text("Câu hỏi đầu tiên").padding(.top, 4)
+            TextField("Câu hỏi đầu tiên", text: $sample, prompt: Text("Để trống nếu chưa muốn hỏi"))
+                .textFieldStyle(.roundedBorder).labelsHidden()
+            Text("\(draft.assistantName) sẽ trả lời câu này ngay khi bạn bấm Bắt đầu.").font(.caption).foregroundStyle(.secondary)
+            Divider().padding(.vertical, 6)
+            summaryRow("Gọi bằng", ([draft.assistantName] + draft.wakeWords).joined(separator: ", "))
             summaryRow("Bộ não AI", draft.agent == .pi && !draft.agentModel.isEmpty ? "pi · \(draft.agentModel)" : draft.agent.title)
             summaryRow("Giọng nói", TtsPageView.voiceLabel(draft))
             summaryRow("Nhận dạng", SttPageView.summary(draft) + (downloader.active == nil ? "" : " (đang tải \(Int(downloader.progress * 100))%)"))
-            summaryRow("Microphone", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "Đã cấp quyền" : "Chưa cấp quyền")
             summaryRow("Cách nghe", draft.voiceMode.title)
-            summaryRow("Trả lời bằng giọng", draft.speakReplies ? (draft.readEveryAnswer ? "Mọi câu" : "Khi hỏi bằng giọng") : "Tắt")
-            summaryRow("Trí nhớ", draft.memoryEnabled ? "Bật" : "Tắt")
-            summaryRow("Vị trí notch", draft.notchPosition.title)
-            Text("Bạn có thể thay đổi mọi lựa chọn trong Cài đặt.").foregroundStyle(.secondary).padding(.top, 8)
+            Text("Mọi lựa chọn đều đổi được trong Cài đặt.").font(.caption).foregroundStyle(.secondary).padding(.top, 6)
         }
     }
 
@@ -227,6 +215,11 @@ private struct OnboardingView: View {
             draft.assistantName = draft.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
             draft.wakeWords = draft.wakeWords.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
             if draft.assistantName.isEmpty { errorMessage = "Nhập tên trợ lý để tiếp tục."; return }
+        }
+        if page == .stt && draft.sttEngine == .whisper && downloader.active == nil
+            && !FileManager.default.fileExists(atPath: ProfileStore.modelsDir.appendingPathComponent(draft.whisperModel).path) {
+            errorMessage = "Tải một mô hình Whisper, hoặc chọn Apple Speech để dùng ngay."
+            return
         }
         if page == .tryIt && !hovered { errorMessage = "Đưa chuột lên notch ở đỉnh màn hình để tiếp tục."; return }
         page = OnboardingPage(rawValue: page.rawValue + 1) ?? .finish
@@ -243,6 +236,8 @@ private struct OnboardingView: View {
         draft.wakeWords = draft.wakeWords.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         store.save(draft)
         onFinish()
+        let question = sample.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !question.isEmpty { NotificationCenter.default.post(name: .tiboSubmit, object: question) }
     }
 }
 
@@ -260,8 +255,10 @@ private struct ProfilePageView: View {
     }
 }
 
+/// Name, extra wake words and voice training on one page: training learns how the user says the name.
 private struct AssistantPageView: View {
     @Binding var draft: Profile
+    let store: ProfileStore
     var body: some View {
         Form {
             Section("Tên trợ lý") {
@@ -280,6 +277,7 @@ private struct AssistantPageView: View {
                 }
                 Button("Thêm từ gọi") { draft.wakeWords.append("") }
             }
+            TrainingSections(draft: $draft, store: store)
         }.formStyle(.grouped)
     }
 }
@@ -431,7 +429,11 @@ private struct SttPageView: View {
                             if downloader.active?.id == entry.id {
                                 ProgressView(value: downloader.progress).frame(width: 90)
                             } else if path == nil {
-                                Button("Tải về") { download(entry) }.disabled(downloader.active != nil)
+                                if entry.id == recommended.id {
+                                    Button("Tải về") { download(entry) }.buttonStyle(.borderedProminent).disabled(downloader.active != nil)
+                                } else {
+                                    Button("Tải về") { download(entry) }.disabled(downloader.active != nil)
+                                }
                             }
                         }
                         .contentShape(Rectangle())
@@ -445,14 +447,15 @@ private struct SttPageView: View {
             }
         }.formStyle(.grouped)
         .onAppear {
-            if !Self.vietASRAvailable && draft.sttEngine == .vietasr { draft.sttEngine = .whisper }
-            // Nothing usable installed: start the recommended model in the background right away.
+            if !Self.vietASRAvailable && draft.sttEngine == .vietasr { draft.sttEngine = .apple }
+            // Whisper without a model can't hear anything. Use an installed model if there is one, otherwise
+            // start on Apple Speech; downloading a model (hundreds of MB) is the user's call.
             let current = FileManager.default.fileExists(atPath: ProfileStore.modelsDir.appendingPathComponent(draft.whisperModel).path)
             if draft.sttEngine == .whisper && !current && downloader.active == nil {
                 if let installed = WhisperCatalog.entries.lazy.compactMap(WhisperCatalog.installed).first {
                     draft.whisperModel = installed
                 } else {
-                    download(WhisperCatalog.recommended())
+                    draft.sttEngine = .apple
                 }
             }
         }
@@ -496,7 +499,8 @@ private enum TiboProcess {
     }
 }
 
-private struct TrainingPageView: View {
+/// Voice training as Form sections, shown under the name and wake words on the "Tên gọi" page.
+private struct TrainingSections: View {
     @ObservedObject private var store: ProfileStore
     @Binding var draft: Profile
     @StateObject private var recorder = VoiceRecorder()
@@ -511,22 +515,29 @@ private struct TrainingPageView: View {
         _store = ObservedObject(wrappedValue: store)
     }
 
+    private var name: String { draft.assistantName.isEmpty ? "Tibo" : draft.assistantName }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Đọc tên trợ lý ba lần để Tibo quen giọng của bạn.").foregroundStyle(.secondary)
+        Section {
             recordButton(title: "Ghi từ gọi (\(wakeTakes.count)/3)", active: recorder.recording) { recordWake() }
             if recorder.recording { ProgressView(value: recorder.level).tint(.orange).accessibilityLabel("Mức âm thanh") }
             ForEach(Array(wakeTakes.enumerated()), id: \.offset) { index, take in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Lần \(index + 1)").font(.headline)
-                    Text("Backend: \(take.backend.isEmpty ? "không nhận được" : take.backend)")
-                    Text("Apple Speech: \(take.apple.isEmpty ? "không nhận được" : take.apple)")
-                }.font(.callout)
+                LabeledContent("Lần \(index + 1)") {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(take.backend.isEmpty ? "không nhận được" : take.backend)
+                        Text("Apple: \(take.apple.isEmpty ? "không nhận được" : take.apple)").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
-            Divider()
-            Text("Từ vựng riêng").font(.headline)
+        } header: {
+            Text("Luyện giọng")
+        } footer: {
+            Text("Đọc “\(name)” ba lần; cách \(name) nghe thấy được thêm vào từ gọi.").font(.caption).foregroundStyle(.secondary)
+        }
+        .onDisappear { recorder.stop() }
+        Section {
             HStack {
-                TextField("Ví dụ: Claude Code", text: $vocabularyWord).textFieldStyle(.roundedBorder)
+                TextField("Từ", text: $vocabularyWord, prompt: Text("Ví dụ: Claude Code")).labelsHidden()
                 Button("Ghi 2 lần") { recordVocabulary() }
                     .disabled(vocabularyWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || recorder.recording || vocabularyRecording)
             }
@@ -538,8 +549,11 @@ private struct TrainingPageView: View {
             }
             if !vocabularyTakes.isEmpty { Text("Đã ghi \(vocabularyTakes.count)/2 lần cho “\(vocabularyWord)”").foregroundStyle(.secondary) }
             if !errorMessage.isEmpty { Text(errorMessage).foregroundStyle(.red) }
+        } header: {
+            Text("Từ vựng riêng")
+        } footer: {
+            Text("Tên riêng hay bị nghe nhầm: gõ từ rồi đọc hai lần để \(name) học cách bạn nói.").font(.caption).foregroundStyle(.secondary)
         }
-        .onDisappear { recorder.stop() }
     }
 
     private func recordButton(title: String, active: Bool, action: @escaping () -> Void) -> some View {
@@ -694,14 +708,16 @@ private struct ListenPageView: View {
                 Toggle("Cho \(draft.assistantName) nhớ các cuộc trò chuyện", isOn: $draft.memoryEnabled)
                 Text("Lưu trong ~/.local/share/tibo/memory trên máy này. Nói “quên hết” để xoá.").font(.caption).foregroundStyle(.secondary)
             }
+            NotchSections(draft: $draft)
         }.formStyle(.grouped)
     }
 }
 
-private struct NotchPageView: View {
+/// Notch placement and hover tuning, shown on the "Nghe, nói và notch" page.
+private struct NotchSections: View {
     @Binding var draft: Profile
     var body: some View {
-        Form {
+        Group {
             Section("Vị trí") {
                 Picker("Vị trí", selection: $draft.notchPosition) {
                     ForEach(Profile.NotchPosition.allCases) { Text($0.title).tag($0) }
@@ -718,7 +734,7 @@ private struct NotchPageView: View {
                 Button("Hiện vùng rê chuột") { NotificationCenter.default.post(name: .tiboShowHoverZone, object: nil) }
                 Text("Vùng hiện theo cài đặt đã lưu, trong 3 giây, khi notch đang chạy.").font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped)
+        }
     }
 }
 
@@ -877,7 +893,7 @@ private struct SettingsRootView: View {
     var body: some View {
         HStack(spacing: 0) {
             List(selection: $selection) {
-                ForEach([OnboardingPage.profile, .assistant, .training, .agent, .tts, .stt, .listen, .notch], id: \.self) { page in
+                ForEach([OnboardingPage.profile, .assistant, .agent, .tts, .stt, .listen], id: \.self) { page in
                     Label(page.title, systemImage: page.symbol).tag(Optional(page))
                 }
                 Label("Nâng cao", systemImage: "gearshape.2").tag(Optional<OnboardingPage>.none)
@@ -896,13 +912,11 @@ private struct SettingsRootView: View {
     @ViewBuilder private var detail: some View {
         switch selection {
         case .some(.profile): ProfilePageView(draft: $draft)
-        case .some(.assistant): AssistantPageView(draft: $draft)
+        case .some(.assistant): AssistantPageView(draft: $draft, store: store)
         case .some(.agent): AgentPageView(draft: $draft)
         case .some(.tts): TtsPageView(draft: $draft)
         case .some(.stt): SttPageView(draft: $draft)
         case .some(.listen): ListenPageView(draft: $draft)
-        case .some(.notch): NotchPageView(draft: $draft)
-        case .some(.training): TrainingPageView(draft: $draft, store: store)
         case nil: advanced
         default: EmptyView()
         }
