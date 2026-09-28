@@ -1618,7 +1618,8 @@ private final class NotchController: ObservableObject {
     @Published private(set) var expanded = false
     @Published private(set) var typing = false
     @Published private(set) var barHeight: CGFloat = 32
-    @Published private(set) var pillWidth: CGFloat = 280
+    @Published private(set) var pillWidth: CGFloat = 250
+    @Published private(set) var popupWidth: CGFloat = expandedWidth
     @Published private(set) var position: Profile.NotchPosition = .center
     let store: ProfileStore
     let voice: VoiceController
@@ -1680,14 +1681,19 @@ private final class NotchController: ObservableObject {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let profile = store.profile
         let bar = max(24, screen.safeAreaInsets.top, screen.frame.maxY - screen.visibleFrame.maxY)
-        var notch: CGFloat = 170
-        if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
-            notch = screen.frame.width - left.width - right.width
+        let hardwareNotchWidth: CGFloat? = if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
+            screen.frame.width - left.width - right.width
+        } else {
+            nil
         }
-        // Off-centre there is no hardware notch to hug, so the pill only needs room for the face.
-        let pill = profile.notchPosition == .center ? notch + 80 : 100
+        // On a notched MacBook, both states align exactly with the hardware notch.
+        // Other displays retain the wider virtual notch; side positions still need room for content.
+        let centered = profile.notchPosition == .center
+        let pill = centered ? hardwareNotchWidth ?? 250 : 100
+        let popup = centered ? hardwareNotchWidth ?? Self.expandedWidth : Self.expandedWidth
         if barHeight != bar { barHeight = bar }
         if pillWidth != pill { pillWidth = pill }
+        if popupWidth != popup { popupWidth = popup }
         if position != profile.notchPosition { position = profile.notchPosition }
         if typing != panel.isKeyWindow { typing = panel.isKeyWindow }
         let top = screen.frame
@@ -1696,7 +1702,7 @@ private final class NotchController: ObservableObject {
         if panel.frame != frame { panel.setFrame(frame, display: true) }
 
         let inputRow = typing || voice.inputError != nil || voice.voiceMode != .wake
-        let visible = expanded ? NSSize(width: Self.expandedWidth, height: barHeight + (typing ? 296 : inputRow ? 206 : 156)) : NSSize(width: pillWidth, height: barHeight)
+        let visible = expanded ? NSSize(width: popupWidth, height: barHeight + (typing ? 296 : inputRow ? 206 : 156)) : NSSize(width: pillWidth, height: barHeight)
         let margin = CGFloat(profile.hoverMargin)
         hotRect = NSRect(x: x(width: visible.width, in: top), y: top.maxY - visible.height, width: visible.width, height: visible.height).insetBy(dx: -margin, dy: -margin)
         let hovering = hotRect.contains(NSEvent.mouseLocation)
@@ -1787,7 +1793,7 @@ private struct ContentView: View {
         ZStack(alignment: .top) {
             if notch.expanded { expandedView.transition(.opacity) } else { collapsedView.transition(.opacity) }
         }
-        .frame(width: notch.expanded ? NotchController.expandedWidth : notch.pillWidth, alignment: .top)
+        .frame(width: notch.expanded ? notch.popupWidth : notch.pillWidth, alignment: .top)
         .background(.black, in: shape)
         .clipShape(shape)
         .contextMenu {
