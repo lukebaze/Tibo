@@ -14,6 +14,7 @@ Nguồn: dùng thử Taby app 1.0.11 và repo TRIIIS-LABS/firmware-taby. Xem th�
 - [x] Cho chỉnh độ rộng vùng kích hoạt và thời gian tự thu lại (đang cố định 1,2 s), kèm nút "Hiện vùng hover".
 - [x] Chọn vị trí notch: Trái / Giữa / Phải.
 - [x] Hiện lỗi ngay trong placeholder của ô nhập (vd "Tibo chưa nghe rõ, thử lại"), thay cho caption.
+- [x] Ô nhập co theo chiều rộng notch; placeholder ngắn để không đè lên nút lệnh và mic.
 - [x] Thêm menu grid hoặc lệnh `/` cho các tác vụ hay dùng.
 
 ## Onboarding

@@ -1908,11 +1908,12 @@ private struct ContentView: View {
 
     private var inputRow: some View {
         HStack(spacing: 2) {
-            TextField("", text: $draft, prompt: Text(voice.inputError ?? "Hỏi \(notch.store.profile.assistantName) hoặc gõ /")
+            TextField("", text: $draft, prompt: Text(voice.inputError ?? "Hỏi \(notch.store.profile.assistantName)…")
                 .foregroundStyle(voice.inputError == nil ? Color.white.opacity(0.55) : Color.red.opacity(0.9)))
                 .textFieldStyle(.plain)
                 .font(.system(size: 14, design: .rounded))
                 .foregroundStyle(.white)
+                .frame(minWidth: 0, maxWidth: .infinity)
                 .focused($inputFocused)
                 .onSubmit {
                     if let command = matches.first { run(command); return }
