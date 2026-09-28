@@ -1,88 +1,77 @@
 <p align="center">
-  <img src=".github/readme-hero.svg" alt="Tibo: trợ lý AI ở ngay notch Mac, minh họa khuôn mặt Tibo và ô lệnh" width="100%">
+  <img src=".github/readme-hero.svg" width="100%" alt="Tibo, trợ lý giọng nói ở notch Mac">
 </p>
 
-<h1 align="center">Tibo</h1>
-<p align="center"><strong>Trợ lý giọng nói sống ngay trên notch của Mac.</strong><br>Nói một câu, gõ một lệnh, hoặc hỏi về thứ đang hiện trên màn hình.</p>
+# Tibo
 
-<p align="center">
-  <a href="#bat-dau">Bắt đầu</a> &nbsp;·&nbsp;
-  <a href="#tibo-lam-duoc-gi">Khám phá</a> &nbsp;·&nbsp;
-  <a href="#cach-hoat-dong">Cách hoạt động</a> &nbsp;·&nbsp;
-  <a href="#luu-y">Lưu ý</a>
-</p>
+Tibo là trợ lý giọng nói ở notch Mac. Bạn có thể gõ hoặc nói để hỏi đáp, đọc
+màn hình và giao việc cho coding agent đã cài trên máy.
 
----
+Trang này giúp bạn **build Tibo từ mã nguồn và thử câu đầu tiên**. Chưa cần
+cài Whisper hay Kokoro: lần đầu có thể chọn Apple Speech và giọng macOS.
 
-<table>
-<tr>
-<td width="24%" align="center" valign="middle"><img src="app/icon.svg" alt="Biểu tượng gốc của ứng dụng Tibo: khuôn mặt cười trên nền cam" width="135"></td>
-<td valign="middle"><strong>Gặp Tibo ở notch.</strong><br>Di chuột tới notch để mở, gõ câu hỏi hoặc nhấn mic để nói. Tibo nghe, phản hồi bằng giọng nói và giúp bạn làm việc trên máy. Gõ <code>/</code> để xem lệnh nhanh.</td>
-</tr>
-</table>
+## Trước khi bắt đầu
 
-<a id="tibo-lam-duoc-gi"></a>
-## Một trợ lý, nhiều cách làm việc
+- Dùng máy Mac có Xcode Command Line Tools và Rust/Cargo. Nếu chưa có Command
+  Line Tools, chạy `xcode-select --install` và hoàn tất cửa sổ cài đặt.
+- Cài và cấu hình ít nhất một CLI agent: pi, OMP, Claude Code hoặc Codex. Tibo
+  mặc định chọn pi, nhưng cho đổi sang agent đã có trên máy.
+- Đọc [`build.sh`](build.sh) nếu bạn đã cài Tibo: script **thay**
+  `~/Applications/Tibo.app`, chép CLI vào `~/.local/bin/` và tạo
+  `dist/Tibo.dmg`. Bản build sẽ được ký bằng chứng chỉ có sẵn hoặc ký ad-hoc.
 
-| Nói chuyện | Nhìn màn hình | Làm việc cùng agent |
-| :--- | :--- | :--- |
-| Gọi “Tibo”, dùng mic hoặc nhập chữ. Có chế độ tự gửi khi ngừng nói, ngắt lời và trả lời bằng giọng macOS; Kokoro tiếng Việt khi đã cài. | Đọc chữ trên màn hình bằng OCR; chuyển ảnh màn hình cho agent có khả năng xem ảnh khi cần. Quyền Ghi màn hình được macOS hỏi riêng. | Chọn **pi, OMP, Claude Code hoặc Codex** đã cài. Giao việc coding, hỏi tiến độ, xem kết quả; việc giao tác vụ coding có bước xác nhận trước khi khởi chạy. |
-
-Tibo còn có các quy trình cho lịch, ghi chú, nhắc việc, thời tiết và trình duyệt. Câu trả lời thông thường không cần cấp quyền chạy lệnh cho agent.
-
-<a id="bat-dau"></a>
-## Bắt đầu trên macOS
-
-**Cần có:** macOS, Xcode Command Line Tools (`xcode-select --install`), Rust/Cargo và ít nhất một CLI agent tương thích đã được cài, đăng nhập/cấu hình model. `pi` là lựa chọn mặc định; màn hình thiết lập sẽ cho chọn agent có trên máy. Apple Speech và giọng hệ thống macOS dùng được khi chưa cài Whisper hoặc Kokoro.
+## 1. Lấy mã nguồn và build
 
 ```sh
 git clone https://github.com/lukebaze/Tibo.git
 cd Tibo
+mkdir -p "$HOME/Applications" "$HOME/.local/bin"
 ./build.sh
+```
+
+Sau khi build xong, kiểm tra `Tibo.app` và `dist/Tibo.dmg` trong thư mục repo.
+Không cần chạy lại `build.sh` để mở ứng dụng.
+
+## 2. Mở và thiết lập
+
+```sh
 open Tibo.app
 ```
 
-`build.sh` biên dịch Rust + Swift, tạo `dist/Tibo.dmg`, **thay** `~/Applications/Tibo.app` và chép `tibo`, `tibo-web` vào `~/.local/bin/`. Nếu máy có chứng chỉ Apple Development/Developer ID, script dùng để ký app; nếu không, nó ký ad-hoc. Hãy xem script trước khi chạy nếu bạn đã cài một bản Tibo khác.
+Trong màn hình thiết lập:
 
-Trong thiết lập lần đầu:
+1. Chọn agent đã cài và cấu hình model/tài khoản của agent đó.
+2. Chọn cách nghe. Để bắt đầu nhanh, chọn **Apple Speech** và **Giọng hệ thống
+   macOS**. Whisper cần tải model khi bạn chọn; Kokoro chỉ dùng được khi đã
+   cài voicepack.
+3. Cho phép Microphone và Speech Recognition nếu muốn nói với Tibo. Chỉ cấp
+   Ghi màn hình khi dùng tính năng đọc màn hình; chỉ cấp Trợ năng khi cần
+   điều khiển máy.
 
-1. Chọn agent/model và cách nghe: gọi “Tibo”, bấm mic kiểu Smart hoặc bấm để gửi.
-2. Chọn Apple Speech, hoặc tải model Whisper trong app nếu muốn nhận dạng giọng nói bằng model trên máy. Chọn giọng hệ thống; Kokoro chỉ hiện khả dụng khi đã cài voicepack.
-3. Cấp Microphone, Speech Recognition; chỉ cấp Ghi màn hình/Trợ năng khi muốn Tibo đọc hoặc điều khiển máy.
-4. Di chuột tới notch và thử: **“Tibo, hôm nay tôi nên làm gì?”**
+## 3. Thử một câu
 
-Chẩn đoán môi trường sau khi build: `~/.local/bin/tibo --doctor`.
+Di chuột tới notch, nhập **“Tibo, chào bạn”** rồi gửi. Tibo sẽ hiện câu trả lời
+ở notch; giọng đọc phụ thuộc cài đặt bạn vừa chọn. Bạn cũng có thể bấm mic
+để nói hoặc gõ `/` để xem lệnh nhanh.
 
-<a id="cach-hoat-dong"></a>
-## Cách hoạt động
+Nếu không thấy phản hồi, kiểm tra agent bạn chọn đã đăng nhập/cấu hình model.
+Nếu mic không hoạt động, xem quyền Microphone và Speech Recognition trong
+System Settings. Mục **Chẩn đoán** trong Cài đặt Tibo chạy `tibo --doctor`;
+lệnh này kiểm tra cả Whisper, VietASR và Kokoro tùy chọn, nên có thể báo
+`DOCTOR FAIL` dù chế độ Apple Speech vẫn hoạt động.
 
-```text
-Giọng nói / bàn phím
-        ↓
-   Tibo trên notch ──→ nhận dạng giọng nói (Apple Speech / Whisper)
-        ↓
-   Định tuyến yêu cầu ──→ kiểm tra quyền / xác nhận khi cần
-        ↓
-   Tác vụ macOS / màn hình / coding agent
-        ↓
-   Phản hồi trên notch + giọng đọc
-```
+## Khi giao việc cho Tibo
 
-App giao diện viết bằng **SwiftUI/AppKit**; phần định tuyến, phiên làm việc, bộ nhớ và xử lý lời nói ở **Rust**. Agent CLI chạy trên chính máy Mac của bạn. Cấu hình model, dịch vụ AI và quyền truy cập tùy chọn quyết định phần nào hoạt động được; “chạy cục bộ” không có nghĩa mọi lời gọi model đều offline.
+Tác vụ coding cần xác nhận trước khi khởi chạy. Một số quy trình sử dụng CLI
+agent có thể chạy shell trên Mac; xem kỹ nội dung tác vụ trước khi đồng ý.
+Quyền macOS và xác nhận trong Tibo không phải sandbox bảo mật cho agent ngoài.
+Model/agent từ xa có thể gửi nội dung yêu cầu tới dịch vụ của chúng.
 
-<a id="luu-y"></a>
-## Quyền riêng tư &amp; giới hạn
+## Xem thêm
 
-- Tibo có thể đọc màn hình và điều khiển macOS **sau khi được cấp quyền tương ứng**. Xem kỹ yêu cầu xác nhận trước khi giao việc có tác động đến máy hoặc tệp.
-- Một số quy trình dùng agent CLI có khả năng chạy shell; chỉ chạy quy trình mà bạn tin tưởng. Đừng coi xác nhận trong app là sandbox bảo mật cho các CLI bên ngoài.
-- Model Whisper tải từ bên ngoài khi bạn chọn tải; Apple Speech là đường mặc định nếu chưa có model. Các agent/model từ xa có thể gửi nội dung yêu cầu ra dịch vụ của chúng.
-- Ảnh biểu tượng `app/icon.svg` là thiết kế riêng cho Tibo. Một số ảnh động trong `app/taby/` là artwork của **Taby**, có điều khoản và ghi công riêng tại [`app/taby/LICENSE`](app/taby/LICENSE); không được trình bày chúng như nhân vật gốc do Tibo tạo ra.
-
-<details>
-<summary><strong>Dành cho người muốn sửa code</strong></summary>
-
-`app/` chứa giao diện macOS, `src/` chứa backend Rust, `workflows/` chứa quy trình, `scripts/` chứa cầu nối giọng nói và `bench/` chứa dữ liệu benchmark. Chạy `cargo test` cho phần Rust; `./build.sh` để đóng gói app trên macOS. Script build cũng ghi đè bản cài trong `~/Applications/`, nên không chạy nó chỉ để kiểm tra một thay đổi Markdown.
-
-</details>
-
-<p align="center"><sub>Made for the Mac you already use. Nói “Tibo” là bắt đầu.</sub></p>
+- [Brandkit Tibo](.github/tibo-brandkit.webp) là bảng định hướng hình ảnh;
+  [icon gốc](app/icon.svg) là biểu tượng đang dùng trong app.
+- Ảnh động ở `app/taby/` là artwork của Taby, không phải nhân vật gốc của
+  Tibo. Xem [điều khoản và ghi công](app/taby/LICENSE).
+- Muốn sửa backend Rust, chạy `cargo test`. `./build.sh` đóng gói cả ứng dụng
+  macOS và ghi đè bản cài trong `~/Applications/`.
