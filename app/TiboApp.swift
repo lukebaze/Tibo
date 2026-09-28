@@ -6,6 +6,15 @@ import Speech
 import SwiftUI
 import Combine
 import Vision
+@MainActor
+func announceAccessibility(_ message: String, priority: NSAccessibilityPriorityLevel = .medium) {
+    NSAccessibility.post(
+        element: NSApp as Any,
+        notification: .announcementRequested,
+        userInfo: [.announcement: message, .priority: priority.rawValue]
+    )
+}
+
 
 private enum VoiceState: String {
     case listening = "Đang nghe"
@@ -1785,6 +1794,7 @@ private struct ContentView: View {
     @ObservedObject var notch: NotchController
     @State private var draft = ""
     @FocusState private var inputFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var reaction: BuddyFace.Mood?
     @State private var reactionID = 0
 
@@ -1808,12 +1818,21 @@ private struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: notch.position == .left ? .topLeading : notch.position == .right ? .topTrailing : .top)
         .environment(\.colorScheme, .dark)
-        .animation(.spring(response: 0.38, dampingFraction: 0.8), value: notch.expanded)
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: notch.typing)
+        .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.8), value: notch.expanded)
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: notch.typing)
         .animation(.easeInOut(duration: 0.2), value: caption)
         .onChange(of: notch.typing) { _, typing in inputFocused = typing }
         .onChange(of: voice.state) { old, new in
             if old == .speaking && new != .speaking { react(.happy, for: 2.2) }
+            if [.processing, .transcribing, .approval, .stopped].contains(new) {
+                announceAccessibility(new.rawValue)
+            }
+        }
+        .onChange(of: voice.inputError) { _, error in
+            if let error { announceAccessibility("Lỗi: \(error)", priority: .high) }
+        }
+        .onChange(of: voice.showAnswer) { _, shown in
+            if shown && !voice.summary.isEmpty { announceAccessibility(voice.summary) }
         }
         .onChange(of: notch.expanded) { _, expanded in
             if expanded && voice.state == .listening { react(.surprised, for: 2.6) }
@@ -1829,6 +1848,9 @@ private struct ContentView: View {
         .frame(height: notch.barHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Tibo: \(voice.state.rawValue)")
+        .accessibilityHint("Nhấn để mở. Phím tắt Control Option Space.")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { notch.toggle() }
     }
 
     private var expandedView: some View {
@@ -1842,24 +1864,27 @@ private struct ContentView: View {
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.72))
                     .multilineTextAlignment(.center)
-                    .lineLimit(voice.showAnswer ? 4 : 2)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 20)
                     .transition(.opacity)
             }
             if showsInput {
                 inputRow
-                    .padding(.horizontal, 16)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.horizontal, 4)
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                 ForEach(matches, id: \.name) { command in
                     Button { run(command) } label: {
                         HStack {
                             Text(command.name).font(.system(size: 12, design: .monospaced)).foregroundStyle(.white.opacity(0.5))
                             Text(command.label).foregroundStyle(.white)
                             Spacer()
-                        }.contentShape(Rectangle())
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 26)
+                    .padding(.horizontal, 12)
+                    .accessibilityLabel("\(command.name), \(command.label)")
                 }
             }
         }
@@ -1882,9 +1907,9 @@ private struct ContentView: View {
     }
 
     private var inputRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 2) {
             TextField("", text: $draft, prompt: Text(voice.inputError ?? "Hỏi \(notch.store.profile.assistantName) hoặc gõ /")
-                .foregroundStyle(voice.inputError == nil ? Color.white.opacity(0.4) : Color.red.opacity(0.85)))
+                .foregroundStyle(voice.inputError == nil ? Color.white.opacity(0.55) : Color.red.opacity(0.9)))
                 .textFieldStyle(.plain)
                 .font(.system(size: 14, design: .rounded))
                 .foregroundStyle(.white)
@@ -1895,21 +1920,28 @@ private struct ContentView: View {
                     draft = ""
                 }
                 .accessibilityLabel(voice.inputError.map { "Lỗi: \($0). Nhập yêu cầu" } ?? "Nhập yêu cầu")
-            Button { draft = "/" ; inputFocused = true } label: { Image(systemName: "square.grid.2x2") }
-                .buttonStyle(.plain).foregroundStyle(.white.opacity(0.6))
-                .accessibilityLabel("Lệnh nhanh")
+            Button { draft = "/" ; inputFocused = true } label: {
+                Image(systemName: "square.grid.2x2")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.7))
+            .accessibilityLabel("Lệnh nhanh")
             if voice.voiceMode != .wake {
                 Button(action: voice.tapMic) {
                     Image(systemName: voice.capturing ? "stop.circle.fill" : "mic.circle.fill")
                         .font(.system(size: 20))
                         .foregroundStyle(voice.capturing || voice.armed ? Color.red : Color.white.opacity(0.8))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(voice.capturing ? "Gửi" : voice.armed ? "Huỷ nghe" : "Nói")
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
+        .frame(minHeight: 44)
         .background(.white.opacity(0.1), in: Capsule())
     }
 

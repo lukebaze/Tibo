@@ -108,6 +108,7 @@ private struct OnboardingView: View {
     @State private var draft: Profile
     @State private var page: OnboardingPage = .welcome
     @State private var errorMessage = ""
+    @AccessibilityFocusState private var errorFocused: Bool
     @State private var hovered = false
     @State private var woke = false
     @State private var sample = "Hôm nay là thứ mấy? Gợi ý cho tôi một cách dùng Tibo."
@@ -146,6 +147,7 @@ private struct OnboardingView: View {
                 Text(errorMessage).foregroundStyle(.red).font(.callout)
                     .padding(.horizontal, 28)
                     .accessibilityLabel("Lỗi: \(errorMessage)")
+                    .accessibilityFocused($errorFocused)
             }
             HStack {
                 Button("Quay lại") { page = OnboardingPage(rawValue: page.rawValue - 1) ?? .welcome }
@@ -210,24 +212,40 @@ private struct OnboardingView: View {
 
     private func next() {
         errorMessage = ""
-        if page == .profile && draft.userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errorMessage = "Nhập tên của bạn để tiếp tục."; return }
+        errorFocused = false
+        if page == .profile && draft.userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showError("Nhập tên của bạn để tiếp tục.")
+            return
+        }
         if page == .assistant {
             draft.assistantName = draft.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
             draft.wakeWords = draft.wakeWords.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-            if draft.assistantName.isEmpty { errorMessage = "Nhập tên trợ lý để tiếp tục."; return }
+            if draft.assistantName.isEmpty {
+                showError("Nhập tên trợ lý để tiếp tục.")
+                return
+            }
         }
         if page == .stt && draft.sttEngine == .whisper && downloader.active == nil
             && !FileManager.default.fileExists(atPath: ProfileStore.modelsDir.appendingPathComponent(draft.whisperModel).path) {
-            errorMessage = "Tải một mô hình Whisper, hoặc chọn Apple Speech để dùng ngay."
+            showError("Tải một mô hình Whisper, hoặc chọn Apple Speech để dùng ngay.")
             return
         }
-        if page == .tryIt && !hovered { errorMessage = "Đưa chuột lên notch ở đỉnh màn hình để tiếp tục."; return }
+        if page == .tryIt && !hovered {
+            showError("Đưa chuột lên notch ở đỉnh màn hình để tiếp tục.")
+            return
+        }
         page = OnboardingPage(rawValue: page.rawValue + 1) ?? .finish
         if page == .tryIt {
             // The live notch reads the stored profile, so persist the choices (still not onboarded) before starting it.
             store.save(draft)
             startNotch()
         }
+    }
+
+    private func showError(_ message: String) {
+        errorMessage = message
+        announceAccessibility(message, priority: .high)
+        DispatchQueue.main.async { errorFocused = true }
     }
 
     private func finish() {
@@ -271,8 +289,13 @@ private struct AssistantPageView: View {
                     HStack {
                         TextField("Từ gọi", text: Binding(get: { draft.wakeWords[index] }, set: { draft.wakeWords[index] = $0 }), prompt: Text("Ví dụ: Ti bô"))
                             .labelsHidden()
-                        Button { draft.wakeWords.remove(at: index) } label: { Image(systemName: "minus.circle") }
-                            .buttonStyle(.borderless).accessibilityLabel("Xóa từ gọi \(word)")
+                        Button { draft.wakeWords.remove(at: index) } label: {
+                            Image(systemName: "minus.circle")
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Xóa từ gọi \(word)")
                     }
                 }
                 Button("Thêm từ gọi") { draft.wakeWords.append("") }
@@ -290,22 +313,26 @@ private struct AgentPageView: View {
                 ForEach(Profile.Agent.allCases, id: \.id) { agent in
                     let path = AgentCLI.resolve(agent)
                     let selected = draft.agent == agent
-                    HStack {
-                        Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                        VStack(alignment: .leading) {
-                            Text(agent.title)
-                            Text(path?.path ?? "chưa cài").font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        draft.agent = agent
+                    } label: {
+                        HStack {
+                            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                            VStack(alignment: .leading) {
+                                Text(agent.title)
+                                Text(path?.path ?? "chưa cài").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
                         }
-                        Spacer()
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture { if path != nil { draft.agent = agent } }
+                    .buttonStyle(.plain)
+                    .disabled(path == nil)
                     .opacity(path == nil ? 0.5 : 1)
-                    .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(agent.title), \(path == nil ? "chưa cài" : "đã cài")")
+                    .accessibilityValue(selected ? "Đã chọn" : "Chưa chọn")
                     .accessibilityAddTraits(selected ? .isSelected : [])
-                    .accessibilityAction { if path != nil { draft.agent = agent } }
                 }
             }
             if draft.agent == .pi {
@@ -401,6 +428,7 @@ private struct TtsPageView: View {
 private struct SttPageView: View {
     @Binding var draft: Profile
     @ObservedObject private var downloader = ModelDownloader.shared
+    @AccessibilityFocusState private var downloadErrorFocused: Bool
 
     var body: some View {
         Form {
@@ -417,35 +445,56 @@ private struct SttPageView: View {
                     ForEach(WhisperCatalog.entries) { entry in
                         let path = WhisperCatalog.installed(entry)
                         let selected = path != nil ? draft.whisperModel == path : draft.whisperModel.hasSuffix("/\(entry.file)")
-                        HStack {
-                            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                            VStack(alignment: .leading) {
-                                Text(entry.label + (entry.id == recommended.id ? " · Đề xuất cho máy này" : ""))
-                                Text(ByteCountFormatter.string(fromByteCount: entry.bytes, countStyle: .file) + (path == nil ? " · chưa tải" : " · đã có"))
-                                    .font(.caption).foregroundStyle(.secondary)
+                        if let path {
+                            Button {
+                                draft.whisperModel = path
+                            } label: {
+                                HStack {
+                                    modelLabel(entry, selected: selected, recommended: recommended)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
                             }
-                            Spacer()
-                            if downloader.active?.id == entry.id {
-                                ProgressView(value: downloader.progress).frame(width: 90)
-                            } else if path == nil {
-                                if entry.id == recommended.id {
-                                    Button("Tải về") { download(entry) }.buttonStyle(.borderedProminent).disabled(downloader.active != nil)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(modelAccessibilityLabel(entry, installed: true, recommended: recommended))
+                            .accessibilityValue(selected ? "Đã chọn" : "Chưa chọn")
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                        } else {
+                            HStack {
+                                modelLabel(entry, selected: selected, recommended: recommended)
+                                Spacer()
+                                if downloader.active?.id == entry.id {
+                                    ProgressView(value: downloader.progress)
+                                        .frame(width: 90)
+                                        .accessibilityLabel("Đang tải \(entry.label)")
+                                        .accessibilityValue("\(Int(downloader.progress * 100)) phần trăm")
+                                } else if entry.id == recommended.id {
+                                    Button("Tải về") { download(entry) }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(downloader.active != nil)
                                 } else {
-                                    Button("Tải về") { download(entry) }.disabled(downloader.active != nil)
+                                    Button("Tải về") { download(entry) }
+                                        .disabled(downloader.active != nil)
                                 }
                             }
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { if let path { draft.whisperModel = path } }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                     Text(WhisperCatalog.machineSummary()).font(.caption).foregroundStyle(.secondary)
-                    if !downloader.error.isEmpty { Text(downloader.error).font(.caption).foregroundStyle(.red) }
+                    if !downloader.error.isEmpty {
+                        Text(downloader.error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .accessibilityLabel("Lỗi: \(downloader.error)")
+                            .accessibilityFocused($downloadErrorFocused)
+                    }
                 }
             }
         }.formStyle(.grouped)
+        .onChange(of: downloader.error) { _, error in
+            guard !error.isEmpty else { return }
+            announceAccessibility(error, priority: .high)
+            downloadErrorFocused = true
+        }
         .onAppear {
             if !Self.vietASRAvailable && draft.sttEngine == .vietasr { draft.sttEngine = .apple }
             // Whisper without a model can't hear anything. Use an installed model if there is one, otherwise
@@ -463,6 +512,23 @@ private struct SttPageView: View {
 
     private func download(_ entry: WhisperCatalog.Entry) {
         downloader.download(entry) { draft.whisperModel = $0 }
+    }
+
+    private func modelLabel(_ entry: WhisperCatalog.Entry, selected: Bool, recommended: WhisperCatalog.Entry) -> some View {
+        HStack {
+            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+            VStack(alignment: .leading) {
+                Text(entry.label + (entry.id == recommended.id ? " · Đề xuất cho máy này" : ""))
+                Text(ByteCountFormatter.string(fromByteCount: entry.bytes, countStyle: .file) + (WhisperCatalog.installed(entry) == nil ? " · chưa tải" : " · đã có"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func modelAccessibilityLabel(_ entry: WhisperCatalog.Entry, installed: Bool, recommended: WhisperCatalog.Entry) -> String {
+        "\(entry.label), \(entry.id == recommended.id ? "đề xuất, " : "")\(installed ? "đã có" : "chưa tải")"
     }
 
     static func title(_ engine: Profile.SttEngine) -> String {
