@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">Tibo — trợ lý AI ở ngay notch Mac</title>
+  <desc id="desc">Minh họa Tibo với khuôn mặt trắng trong notch, đang nhận một lệnh bằng tiếng Việt.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1">
+      <stop stop-color="#10101c"/><stop offset="1" stop-color="#222036"/>
+    </linearGradient>
+    <linearGradient id="orange" x2="1" y2="1">
+      <stop stop-color="#ffb35c"/><stop offset="1" stop-color="#ff6a3d"/>
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#fff" opacity=".09"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="500" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="500" rx="28" fill="url(#dots)"/>
+  <circle cx="1066" cy="-14" r="293" fill="#ff974a" opacity=".07"/>
+  <circle cx="727" cy="537" r="221" fill="#ff974a" opacity=".05"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <rect x="65" y="65" width="154" height="32" rx="16" fill="#ffb35c"/>
+    <text x="142" y="86" fill="#171521" text-anchor="middle" font-size="12" font-weight="700" letter-spacing="2">MACOS ASSISTANT</text>
+    <text x="59" y="193" fill="#fff9f1" font-size="84" font-weight="800" letter-spacing="-4">Xin chào,</text>
+    <text x="61" y="285" fill="#ffad65" font-size="88" font-weight="800" letter-spacing="-4">mình là Tibo.</text>
+    <text x="65" y="353" fill="#e0d9d3" font-size="24">Trợ lý AI ở ngay notch Mac của bạn.</text>
+    <text x="65" y="400" fill="#a9a7b4" font-size="18">Nói chuyện · Đọc màn hình · Làm việc cùng coding agent</text>
+  </g>
+  <path d="M719 139c23-43 54-66 94-79" fill="none" stroke="#ffb35c" stroke-width="3" stroke-linecap="round" stroke-dasharray="3 12"/>
+  <circle cx="727" cy="124" r="5" fill="#ffb35c"/>
+  <g transform="translate(764 66)">
+    <rect x="16" y="20" width="352" height="356" rx="49" fill="#080912" opacity=".62"/>
+    <rect width="352" height="356" rx="49" fill="url(#orange)"/>
+    <path d="M39 0h274v194a102 102 0 0 1-102 102H141A102 102 0 0 1 39 194Z" fill="#0b0c14"/>
+    <rect x="101" y="85" width="55" height="97" rx="27.5" fill="#fff"/>
+    <rect x="196" y="85" width="55" height="97" rx="27.5" fill="#fff"/>
+    <path d="M141 211q35 30 70 0" fill="none" stroke="#fff" stroke-width="12" stroke-linecap="round"/>
+    <ellipse cx="87" cy="211" rx="19" ry="8" fill="#ffac54"/>
+    <ellipse cx="265" cy="211" rx="19" ry="8" fill="#ffac54"/>
+    <path d="M295 312l6 16 16 6-16 6-6 16-6-16-16-6 16-6Z" fill="#fff"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <rect x="785" y="408" width="326" height="50" rx="25" fill="#323042" stroke="#5a5362"/>
+    <circle cx="812" cy="433" r="7" fill="#ffad65"/>
+    <text x="835" y="440" fill="#f9f3ed" font-size="18">Tibo, mở Terminal...</text>
+  </g>
+  <path d="M1110 102v27m-13-13h27" stroke="#ffb35c" stroke-width="4" stroke-linecap="round"/>
+</svg>
