@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentkit.best/schemas/diagram/lifecycle.schema.json",
+  "title": "LifecycleDiagramIR",
+  "type": "object",
+  "required": ["schema_version", "diagram_type", "meta", "states", "transitions"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "diagram_type": { "type": "string", "enum": ["lifecycle"] },
+    "meta": { "$ref": "common.schema.json#/definitions/DiagramMeta" },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "common.schema.json#/definitions/Identifier" },
+          "label": { "$ref": "common.schema.json#/definitions/SafeText" }
+        }
+      }
+    },
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 250,
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "common.schema.json#/definitions/Identifier" },
+          "label": { "$ref": "common.schema.json#/definitions/SafeText" },
+          "description": { "$ref": "common.schema.json#/definitions/SafeText" },
+          "lane": { "$ref": "common.schema.json#/definitions/Identifier" },
+          "kind": { "type": "string", "enum": ["initial", "active", "waiting", "failure-recoverable", "failure-fatal", "terminal-success", "terminal-cancelled"], "default": "active" }
+        }
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "common.schema.json#/definitions/Identifier" },
+          "from": { "$ref": "common.schema.json#/definitions/Identifier" },
+          "to": { "$ref": "common.schema.json#/definitions/Identifier" },
+          "event": { "$ref": "common.schema.json#/definitions/SafeText" },
+          "action": { "$ref": "common.schema.json#/definitions/SafeText" },
+          "kind": { "type": "string", "enum": ["normal", "retry", "timeout", "cancel", "fail"], "default": "normal" }
+        }
+      }
+    }
+  }
+}

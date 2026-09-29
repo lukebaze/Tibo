@@ -1,0 +1,23 @@
+{
+  "name": "payment-integration-scripts",
+  "version": "1.0.0",
+  "description": "Webhook verifiers and checkout helpers for SePay, PayFS, Polar, Stripe, Creem, Dodo Payments, Lemon Squeezy, Paddle and PayPal",
+  "scripts": {
+    "test": "node test-scripts.js"
+  },
+  "keywords": [
+    "payment",
+    "sepay",
+    "polar",
+    "payfs",
+    "creem",
+    "dodo-payments",
+    "lemonsqueezy",
+    "paddle",
+    "paypal",
+    "webhook",
+    "checkout"
+  ],
+  "author": "",
+  "license": "MIT"
+}

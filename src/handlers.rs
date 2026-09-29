@@ -31,6 +31,10 @@ pub fn handle(decision: Decision, session: &mut Session) -> Option<String> {
             println!("TIBO_TURN clarify");
             Some(say)
         }
+        Decision::UnsupportedComputerUse => {
+            println!("TIBO_TURN unsupported_computer_use");
+            Some("Tibo chưa hỗ trợ thao tác này trên máy. Bạn có thể yêu cầu mở ứng dụng hoặc dùng quy trình trình duyệt đã cấu hình.".into())
+        }
         Decision::Chat => {
             println!("TIBO_TURN chat");
             Some("Tôi đang nghe.".into())
@@ -318,12 +322,7 @@ fn current_session_dir(root: &Path) -> Option<PathBuf> {
         .map(|entry| entry.path())
 }
 
-fn spawn_agent(
-    agent: Agent,
-    prompt: &str,
-    session: &mut Session,
-    enable_computer_tools: bool,
-) -> Result<(), String> {
+fn spawn_agent(agent: Agent, prompt: &str, session: &mut Session) -> Result<(), String> {
     let root = project_root();
     fs::create_dir_all(session::data_dir().join("logs")).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
@@ -335,22 +334,14 @@ fn spawn_agent(
         .join(format!("{stamp}-{}.log", agent.as_str()));
     let log = fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let error_log = log.try_clone().map_err(|e| e.to_string())?;
-    let (program, script) = match (agent, enable_computer_tools) {
-        (Agent::Omp, true) => (env::var("TIBO_OMP").unwrap_or_else(|_| "/opt/homebrew/bin/omp".into()), "\"$1\" -p --no-title --approval-mode write --tools computer,browser \"$2\"; code=$?; echo TIBO_CHILD_EXIT $code; exit $code"),
-        (Agent::Omp, false) => (env::var("TIBO_OMP").unwrap_or_else(|_| "/opt/homebrew/bin/omp".into()), "\"$1\" -p --no-title --approval-mode write \"$2\"; code=$?; echo TIBO_CHILD_EXIT $code; exit $code"),
-        (Agent::ClaudeCode, false) => (env::var("TIBO_CLAUDE").unwrap_or_else(|_| home().join(".nvm/versions/node/v26.2.0/bin/claude").display().to_string()), "\"$1\" -p --output-format text --permission-mode acceptEdits \"$2\"; code=$?; echo TIBO_CHILD_EXIT $code; exit $code"),
-        (Agent::Codex, false) => (env::var("TIBO_CODEX").unwrap_or_else(|_| home().join(".local/bin/codex").display().to_string()), "\"$1\" exec --approve-for-me \"$2\"; code=$?; echo TIBO_CHILD_EXIT $code; exit $code"),
-        _ => return Err("computer tools are only supported by OMP".into()),
-    };
-    let computer_instruction = "Execute only the macOS GUI or browser task literally requested and approved by the user. Do not expand scope. Never expose credentials or secrets. Stop and report failure if the requested target or control is ambiguous.";
-    let agent_prompt = if enable_computer_tools {
-        format!("{prompt}\n\n{computer_instruction}")
-    } else {
-        prompt.into()
+    let (program, script) = match agent {
+        Agent::Omp => (env::var("TIBO_OMP").unwrap_or_else(|_| "/opt/homebrew/bin/omp".into()), "\"$1\" -p --no-title --approval-mode write \"$2\"; code=$?; echo TIBO_CHILD_EXIT $code; exit $code"),
+        Agent::ClaudeCode => (env::var("TIBO_CLAUDE").unwrap_or_else(|_| home().join(".nvm/versions/node/v26.2.0/bin/claude").display().to_string()), "\"$1\" -p --output-format text --permission-mode acceptEdits \"$2\"; code=$?; echo TIBO_CHILD_EXIT $code; exit $code"),
+        Agent::Codex => (env::var("TIBO_CODEX").unwrap_or_else(|_| home().join(".local/bin/codex").display().to_string()), "\"$1\" exec --approve-for-me \"$2\"; code=$?; echo TIBO_CHILD_EXIT $code; exit $code"),
     };
     let mut command = Command::new("/bin/sh");
     command
-        .args(["-c", script, "tibo-agent", &program, &agent_prompt])
+        .args(["-c", script, "tibo-agent", &program, prompt])
         .current_dir(&root)
         .stdout(log)
         .stderr(error_log);
@@ -359,14 +350,7 @@ fn spawn_agent(
     let pid = child.id();
     session.active = true;
     session.agent = Some(agent);
-    session.command = Some(
-        if enable_computer_tools {
-            "computer_use"
-        } else {
-            "coding_task"
-        }
-        .into(),
-    );
+    session.command = Some("coding_task".into());
     session.task = Some(prompt.into());
     session.status = Some("running".into());
     session.pid = Some(pid);
@@ -436,28 +420,12 @@ fn confirm_pending(session: &mut Session) -> (&'static str, String) {
             if session.active {
                 let _ = stop_session(session);
             }
-            match spawn_agent(agent, &prompt, session, false) {
+            match spawn_agent(agent, &prompt, session) {
                 Ok(()) => (
                     "succeeded",
                     format!("Đã giao cho {}: {}", agent.as_str(), truncate(&prompt, 60)),
                 ),
                 Err(error) => ("failed", error),
-            }
-        }
-        PendingAction::ComputerUse { prompt } => {
-            if session.active {
-                (
-                    "failed",
-                    "Đang có tác vụ khác chạy; nói 'dừng' trước".into(),
-                )
-            } else {
-                match spawn_agent(Agent::Omp, &prompt, session, true) {
-                    Ok(()) => (
-                        "succeeded",
-                        "Đã giao tác vụ điều khiển máy tính cho OMP".into(),
-                    ),
-                    Err(error) => ("failed", error),
-                }
             }
         }
         PendingAction::ForgetMemory { line } => memory::forget(line.as_deref()),
@@ -597,7 +565,6 @@ fn pending_route(pending: &PendingAction) -> (&'static str, &'static str) {
     match pending {
         PendingAction::Closed { intent } => (intent_agent(*intent), intent.as_str()),
         PendingAction::Coding { agent, .. } => (agent.as_str(), "coding_task"),
-        PendingAction::ComputerUse { .. } => ("omp", "computer_use"),
         PendingAction::ForgetMemory { .. } => ("tibo", "memory.forget"),
         PendingAction::Workflow { .. } => ("tibo", "workflow"),
     }

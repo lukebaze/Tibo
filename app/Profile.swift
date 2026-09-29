@@ -80,8 +80,6 @@ struct Profile: Codable, Equatable {
     var voiceMode: VoiceMode = .wake
     /// Master switch for spoken replies.
     var speakReplies = true
-    /// Also speak answers to typed requests (voice requests are always spoken while `speakReplies` is on).
-    var readEveryAnswer = true
     var notchPosition: NotchPosition = .center
     var notchOpen: NotchOpen = .everyday
     /// Extra hover margin around the collapsed pill, in points.
@@ -172,8 +170,6 @@ enum AgentCLI {
 }
 
 extension Notification.Name {
-    /// object: String, a request to run as if typed into the notch.
-    static let tiboSubmit = Notification.Name("TiboSubmit")
     /// A downloaded Whisper model is in place; restart whisper-server.
     static let tiboModelReady = Notification.Name("TiboModelReady")
     static let tiboNotchOpened = Notification.Name("TiboNotchOpened")

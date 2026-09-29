@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Analytics Pipeline",
+    "visual_preset": "editorial",
+    "theme": "light"
+  },
+  "stages": [
+    { "id": "stage-ingest", "label": "Ingestion", "order": 0 },
+    { "id": "stage-process", "label": "Transformation", "order": 1 },
+    { "id": "stage-store", "label": "Storage", "order": 2 }
+  ],
+  "nodes": [
+    { "id": "events", "label": "User Events", "role": "source", "stage": "stage-ingest" },
+    { "id": "cleaner", "label": "Sanitizer", "role": "transform", "stage": "stage-process" },
+    { "id": "lake", "label": "Data Lake", "role": "store", "stage": "stage-store" }
+  ],
+  "flows": [
+    { "from": "events", "to": "cleaner", "label": "Raw Kafka" },
+    { "from": "cleaner", "to": "lake", "label": "Cleaned Parquet" }
+  ]
+}

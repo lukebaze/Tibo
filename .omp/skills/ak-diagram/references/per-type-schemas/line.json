@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ak:diagram line spec",
+  "type": "object",
+  "required": [
+    "x",
+    "series"
+  ],
+  "properties": {
+    "variant": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "full"
+      ],
+      "default": "light"
+    },
+    "title": {
+      "type": "string"
+    },
+    "caption": {
+      "type": "string"
+    },
+    "accent": {
+      "type": "string"
+    },
+    "x": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "number"
+        ]
+      }
+    },
+    "series": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "y"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "y": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    },
+    "x_label": {
+      "type": "string"
+    },
+    "y_label": {
+      "type": "string"
+    }
+  }
+}

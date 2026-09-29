@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=https://releases.agentkit.best/schemas/config/v1.json
+#
+# AgentKit project configuration.
+#
+# Everything here applies to this repository only, and overrides the same key in
+# your own ~/.agentkit/config.yaml. Anything you leave out keeps whatever you
+# have set there. Field names are snake_case; run `ak config prefs validate` to
+# check this file.
+#
+# This file is meant to be committed: it is how a team shares one coding level,
+# one docs layout, and one set of hook toggles. For that reason it holds no
+# credentials. API keys, tokens, and trust passphrases belong in your user
+# config, which stays on your machine — do not add `keys`, `api`, or
+# `trust.passphrase` here.
+#
+# Every line below is a commented stub. Uncomment only what this project needs.
+
+# How much explanation you want in answers.
+#   -1 disabled, 0 eli5, 1 junior, 2 mid-level, 3 senior, 4 expert, 5 architect
+# coding_level: 3
+
+# Where this project keeps its documentation and plans.
+# paths:
+#   docs: docs
+#   plans: plans
+
+# docs:
+#   max_loc: 800
+
+# Plan directory naming. Variables: {date}, {issue}, {slug}.
+# plan:
+#   naming_format: "{date}-{issue}-{slug}"
+#   date_format: YYMMDD-HHmm
+#   issue_prefix: GH-
+#   reports_dir: reports
+
+# Detection overrides for a repository the defaults read wrong.
+# project:
+#   type: auto
+#   package_manager: auto
+#   framework: auto
+
+# Language for responses and for thinking. null means English / match the user.
+# locale:
+#   response_language: null
+#   thinking_language: null
+
+# Rules enforced on matching files.
+# assertions:
+#   - pattern: "**/*.go"
+#     rule: "table-driven tests for exported behavior"
+
+# Per-hook toggles, keyed by the hook script's basename. A hook not listed here
+# is enabled. Use this to turn one off for this repository.
+# hooks:
+#   simplify-gate: false
+
+# Default location for ak:worktree. Project scope only honors a relative
+# value (resolved from this project's root, not the caller's cwd) — an
+# absolute value here is ignored, since this file is committed and could
+# come from an untrusted clone. Set an absolute path (e.g. a portable drive)
+# in your own ~/.agentkit/config.yaml instead.
+# worktree:
+#   root: ../my-app-worktrees
+
+# Per-skill configuration, keyed by skill id.
+# skills:
+#   research:
+#     use_gemini: true
+
+# The code-simplifier gate that runs on prompt submit.
+# simplify:
+#   gate:
+#     enabled: true
+
+# Block reads of files that usually hold secrets (.env, credentials, keys).
+# privacy_block: true
+
+# Proof required before a workflow ships.
+# workflow_artifact_gate:
+#   enabled: true
+
+# Editorial visual layer for HTML-emitting skills. Precedence ladder is
+# CLI flag over project config over user config over default. No env-var
+# tier is honoured.
+# visual:
+#   antv:
+#     enabled: true
+#   diagram_design:
+#     enabled: true
+#     motion: none        # none | reveal | step | loop
+
+# Settings this build does not model. Nothing here is validated or converted,
+# and nothing is guaranteed to survive an upgrade.
+# extensions: {}

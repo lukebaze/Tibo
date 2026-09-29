@@ -1,0 +1,316 @@
+/* AgentKit Diagram Reader Styles & Presets (Archify-informed) */
+
+.ak-diagram-root {
+  --ak-bg: #ffffff;
+  --ak-surface: #f8fafc;
+  --ak-surface-border: #e2e8f0;
+  --ak-text-primary: #0f172a;
+  --ak-text-secondary: #475569;
+  --ak-text-muted: #94a3b8;
+  --ak-accent: #2563eb;
+  --ak-accent-light: #dbeafe;
+  --ak-node-bg: #ffffff;
+  --ak-node-border: #cbd5e1;
+  --ak-edge-stroke: #64748b;
+  --ak-edge-active: #2563eb;
+  --ak-badge-bg: #f1f5f9;
+  --ak-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --ak-font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ak-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  
+  font-family: var(--ak-font-sans);
+  background-color: var(--ak-bg);
+  color: var(--ak-text-primary);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--ak-surface-border);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  box-sizing: border-box;
+}
+
+/* Preset: Classic (Light / Dark) */
+.ak-diagram-root[data-preset="classic"][data-theme="light"],
+.ak-diagram-root[data-preset="classic"]:not([data-theme="dark"]) {
+  --ak-bg: #ffffff;
+  --ak-surface: #f8fafc;
+  --ak-surface-border: #e2e8f0;
+  --ak-text-primary: #0f172a;
+  --ak-text-secondary: #475569;
+  --ak-node-bg: #ffffff;
+  --ak-node-border: #cbd5e1;
+  --ak-edge-stroke: #64748b;
+  --ak-edge-active: #2563eb;
+}
+.ak-diagram-root[data-preset="classic"][data-theme="dark"] {
+  --ak-bg: #090d16;
+  --ak-surface: #0f172a;
+  --ak-surface-border: #1e293b;
+  --ak-text-primary: #f8fafc;
+  --ak-text-secondary: #94a3b8;
+  --ak-node-bg: #0f172a;
+  --ak-node-border: #334155;
+  --ak-edge-stroke: #475569;
+  --ak-edge-active: #38bdf8;
+}
+
+/* Preset: Signal Flow (Light / Dark) */
+.ak-diagram-root[data-preset="signal-flow"][data-theme="light"],
+.ak-diagram-root[data-preset="signal-flow"]:not([data-theme="dark"]) {
+  --ak-bg: #f0fdf4;
+  --ak-surface: #dcfce7;
+  --ak-surface-border: #86efac;
+  --ak-text-primary: #14532d;
+  --ak-text-secondary: #166534;
+  --ak-accent: #059669;
+  --ak-node-bg: #ffffff;
+  --ak-node-border: #10b981;
+  --ak-edge-stroke: #059669;
+  --ak-edge-active: #047857;
+}
+.ak-diagram-root[data-preset="signal-flow"][data-theme="dark"] {
+  --ak-bg: #031c18;
+  --ak-surface: #064e3b;
+  --ak-surface-border: #047857;
+  --ak-text-primary: #ecfdf5;
+  --ak-text-secondary: #a7f3d0;
+  --ak-accent: #34d399;
+  --ak-node-bg: #064e3b;
+  --ak-node-border: #10b981;
+  --ak-edge-stroke: #34d399;
+  --ak-edge-active: #6ee7b7;
+}
+
+/* Preset: Blueprint (Light / Dark) */
+.ak-diagram-root[data-preset="blueprint"][data-theme="light"],
+.ak-diagram-root[data-preset="blueprint"]:not([data-theme="dark"]) {
+  --ak-bg: #f0f9ff;
+  --ak-surface: #e0f2fe;
+  --ak-surface-border: #7dd3fc;
+  --ak-text-primary: #0369a1;
+  --ak-text-secondary: #0284c7;
+  --ak-accent: #0284c7;
+  --ak-node-bg: #ffffff;
+  --ak-node-border: #0ea5e9;
+  --ak-edge-stroke: #0284c7;
+  --ak-edge-active: #0369a1;
+  --ak-font-sans: var(--ak-font-mono);
+}
+.ak-diagram-root[data-preset="blueprint"][data-theme="dark"] {
+  --ak-bg: #081d33;
+  --ak-surface: #0c2a4a;
+  --ak-surface-border: #1e4976;
+  --ak-text-primary: #e0f2fe;
+  --ak-text-secondary: #bae6fd;
+  --ak-accent: #38bdf8;
+  --ak-node-bg: #0c213a;
+  --ak-node-border: #38bdf8;
+  --ak-edge-stroke: #7dd3fc;
+  --ak-edge-active: #38bdf8;
+  --ak-font-sans: var(--ak-font-mono);
+}
+
+/* Preset: Editorial (Light / Dark) */
+.ak-diagram-root[data-preset="editorial"][data-theme="light"],
+.ak-diagram-root[data-preset="editorial"]:not([data-theme="dark"]) {
+  --ak-bg: #faf8f5;
+  --ak-surface: #f3efe6;
+  --ak-surface-border: #e2dacb;
+  --ak-text-primary: #1c1917;
+  --ak-text-secondary: #57534e;
+  --ak-accent: #991b1b;
+  --ak-node-bg: #ffffff;
+  --ak-node-border: #d6cfc4;
+  --ak-edge-stroke: #78716c;
+  --ak-edge-active: #991b1b;
+}
+.ak-diagram-root[data-preset="editorial"][data-theme="dark"] {
+  --ak-bg: #1c1917;
+  --ak-surface: #292524;
+  --ak-surface-border: #44403c;
+  --ak-text-primary: #fafaf9;
+  --ak-text-secondary: #d6d3d1;
+  --ak-accent: #ef4444;
+  --ak-node-bg: #292524;
+  --ak-node-border: #78716c;
+  --ak-edge-stroke: #a8a29e;
+  --ak-edge-active: #f87171;
+}
+
+/* Toolbar & Reader Controls */
+.ak-diagram-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: var(--ak-surface);
+  border-bottom: 1px solid var(--ak-surface-border);
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ak-diagram-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ak-text-primary);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ak-diagram-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ak-chapter-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--ak-bg);
+  border: 1px solid var(--ak-surface-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.ak-chapter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ak-text-secondary);
+}
+
+.ak-diagram-btn {
+  background: var(--ak-bg);
+  border: 1px solid var(--ak-surface-border);
+  color: var(--ak-text-primary);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+.ak-diagram-btn:hover {
+  background-color: var(--ak-surface);
+  border-color: var(--ak-accent);
+}
+.ak-diagram-btn:focus-visible {
+  outline: 2px solid var(--ak-accent);
+  outline-offset: 1px;
+}
+
+.ak-diagram-search-input {
+  background: var(--ak-bg);
+  border: 1px solid var(--ak-surface-border);
+  color: var(--ak-text-primary);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  width: 140px;
+}
+.ak-diagram-search-input:focus {
+  outline: 2px solid var(--ak-accent);
+  border-color: transparent;
+}
+
+/* Main Viewport */
+.ak-diagram-viewport {
+  position: relative;
+  overflow: auto;
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--ak-bg);
+}
+
+.ak-diagram-svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Node, Boundary & Edge Styling */
+.ak-node {
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.2s ease;
+}
+.ak-node:hover {
+  transform: translateY(-2px);
+}
+.ak-node.is-dimmed {
+  opacity: 0.25;
+}
+.ak-node.is-focused rect,
+.ak-node.is-focused circle {
+  stroke: var(--ak-accent) !important;
+  stroke-width: 3px !important;
+}
+
+.ak-edge path,
+.ak-edge line,
+.ak-edge polyline {
+  transition: stroke 0.2s ease, opacity 0.2s ease;
+}
+.ak-edge.is-dimmed {
+  opacity: 0.15;
+}
+.ak-edge.is-highlighted path,
+.ak-edge.is-highlighted line,
+.ak-edge.is-highlighted polyline {
+  stroke: var(--ak-edge-active) !important;
+  stroke-width: 2.5px !important;
+}
+.ak-edge text {
+  stroke: none !important;
+  stroke-width: 0 !important;
+  stroke-dasharray: none !important;
+  animation: none !important;
+  fill: var(--ak-text-secondary);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Trace Motion Animation (Finite, <= 8s) */
+@keyframes ak-trace-stroke {
+  from {
+    stroke-dashoffset: 200;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.ak-diagram-root[data-animation="trace"] .ak-edge.is-active-trace path,
+.ak-diagram-root[data-animation="trace"] .ak-edge.is-active-trace line,
+.ak-diagram-root[data-animation="trace"] .ak-edge.is-active-trace polyline {
+  stroke-dasharray: 6 4;
+  animation: ak-trace-stroke 2.5s ease-in-out forwards;
+}
+
+/* Presentation Stage (F) */
+.ak-diagram-root.is-presentation {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  border-radius: 0;
+  border: none;
+  height: 100vh;
+  width: 100vw;
+}
+.ak-diagram-root.is-presentation .ak-diagram-viewport {
+  height: calc(100vh - 48px);
+}
+
+/* Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  .ak-node, .ak-edge, .ak-diagram-btn {
+    transition: none !important;
+    animation: none !important;
+  }
+}

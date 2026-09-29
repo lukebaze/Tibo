@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ak:diagram swimlane spec",
+  "type": "object",
+  "required": [
+    "lanes"
+  ],
+  "properties": {
+    "variant": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "full"
+      ],
+      "default": "light"
+    },
+    "title": {
+      "type": "string"
+    },
+    "caption": {
+      "type": "string"
+    },
+    "accent": {
+      "type": "string"
+    },
+    "lanes": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "actor",
+          "steps"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

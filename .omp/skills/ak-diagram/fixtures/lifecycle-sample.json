@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Payment Order Lifecycle",
+    "visual_preset": "signal-flow",
+    "theme": "dark"
+  },
+  "states": [
+    { "id": "pending", "label": "Pending", "kind": "initial" },
+    { "id": "processing", "label": "Processing", "kind": "active" },
+    { "id": "completed", "label": "Completed", "kind": "terminal-success" },
+    { "id": "failed", "label": "Failed", "kind": "failure-recoverable" },
+    { "id": "cancelled", "label": "Cancelled", "kind": "terminal-cancelled" }
+  ],
+  "transitions": [
+    { "from": "pending", "to": "processing", "event": "Submit" },
+    { "from": "processing", "to": "completed", "event": "Capture" },
+    { "from": "processing", "to": "failed", "event": "Timeout", "kind": "retry" },
+    { "from": "failed", "to": "processing", "event": "Retry", "kind": "retry" },
+    { "from": "failed", "to": "cancelled", "event": "Abort", "kind": "cancel" }
+  ]
+}

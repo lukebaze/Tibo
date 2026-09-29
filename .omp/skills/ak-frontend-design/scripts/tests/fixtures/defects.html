@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Defects fixture</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1a1a1a; background: #fff; }
+  /* Stray backdrop is in-flow on desktop and pushes main into the 240px track. */
+  .app { display: grid; grid-template-columns: 240px 1fr; }
+  .sidebar { background: #f4f4f5; padding: 24px; }
+  .wide { width: 700px; }
+  .ghost { color: #d4d4d8; }
+  .tiny { padding: 2px 4px; font-size: 12px; }
+  dialog { display: flex; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar"><a href="#a">Overview</a></nav>
+  <div class="backdrop"></div>
+  <main>
+    <h1>Appointments</h1>
+    <p class="ghost">Barely readable helper text</p>
+    <div><span>Elena Vasquez</span><span>Cleaning and polish</span></div>
+    <div class="wide">This block is wider than a phone screen.</div>
+    <button class="tiny" type="button">Go</button>
+    <dialog id="d"><p>Closed dialog that should be hidden</p></dialog>
+  </main>
+</div>
+<script>throw new Error('seeded failure');</script>
+</body>
+</html>

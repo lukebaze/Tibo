@@ -1,0 +1,33 @@
+# Copy this file to <project-root>/.agentkit/journal.yaml and edit the
+# account ids for your own zernio-connected accounts. Never commit
+# .agentkit/.env or any API key alongside this file — only account ids
+# belong here. See references/config-schema.md and
+# references/channels-config.md for the full schema.
+
+language: English
+writing_style: casual
+auto: true
+
+channels:
+  - id: x_main
+    platform: x
+    account_id: acc_x_123456
+    build_in_public: true
+
+  - id: threads_main
+    platform: threads
+    account_id: acc_threads_654321
+    build_in_public: true
+
+  - id: li_company
+    platform: linkedin
+    account_id: acc_li_789012
+    language: English
+
+  - id: bsky_main
+    platform: bluesky
+    account_id: acc_bsky_901234
+    build_in_public: true
+
+groups:
+  build_in_public: [x_main, threads_main, bsky_main]

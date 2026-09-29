@@ -158,6 +158,9 @@ mod tests {
             ("tìm trên youtube bài Lạc Trôi", "trinh-duyet"),
             ("mở trang vnexpress xem tin mới", "trinh-duyet"),
             ("Bật nhạc Sơn Tùng trên Youtube.", "trinh-duyet"),
+            ("tìm kiếm web về trí tuệ nhân tạo", "trinh-duyet"),
+            ("truy cập Wikipedia đọc bài trí tuệ nhân tạo", "trinh-duyet"),
+            ("mở link này trong Chrome", "trinh-duyet"),
         ] {
             assert_eq!(find(&all, said).map(|w| w.id.as_str()), Some(id), "{said}");
         }

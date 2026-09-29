@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ak:diagram high-level spec",
+  "type": "object",
+  "required": [
+    "blocks"
+  ],
+  "properties": {
+    "variant": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "full"
+      ],
+      "default": "light"
+    },
+    "title": {
+      "type": "string"
+    },
+    "caption": {
+      "type": "string"
+    },
+    "accent": {
+      "type": "string"
+    },
+    "blocks": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "sub": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ak:diagram — connector effects demo</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="connector-effects.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 2rem;
+      background: var(--ak-diag-paper);
+      color: var(--ak-diag-ink);
+      font-family: var(--ak-diag-font);
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 0.3rem; }
+    p.lead { color: var(--ak-diag-ink-muted); margin: 0 0 2rem; font-size: 0.95rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+    .card {
+      border: 1px solid var(--ak-diag-rule);
+      border-radius: 8px;
+      padding: 1rem;
+      background: var(--ak-diag-paper);
+    }
+    .card h3 {
+      margin: 0 0 0.4rem;
+      font-size: 1rem;
+      font-family: var(--ak-diag-font-mono);
+      color: var(--ak-diag-accent);
+    }
+    .card p {
+      margin: 0 0 0.8rem;
+      font-size: 0.85rem;
+      color: var(--ak-diag-ink-muted);
+    }
+    svg {
+      display: block;
+      width: 100%;
+      height: 60px;
+      overflow: visible;
+    }
+    svg path { fill: none; stroke: var(--ak-diag-ink); stroke-width: 2; }
+  </style>
+</head>
+<body class="ak-diag">
+  <h1>ak:diagram — connector effects</h1>
+  <p class="lead">Eight zero-dependency SVG connector effects. All render with
+    only <code>tokens.css</code> and <code>connector-effects.css</code> loaded.
+    Apply via <code>data-fx="&lt;name&gt;"</code> on any path.</p>
+
+  <div class="grid">
+    <section class="card">
+      <h3>marching-ants</h3>
+      <p>Dashed stroke slides along the path.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path d="M10,20 C 80,-10 180,50 250,20" data-fx="marching-ants"/>
+      </svg>
+    </section>
+
+    <section class="card">
+      <h3>comet</h3>
+      <p>Bright segment traverses the path with a trailing fade.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path d="M10,20 L250,20" data-fx="comet"/>
+      </svg>
+    </section>
+
+    <section class="card">
+      <h3>wave</h3>
+      <p>Stroke width breathes with a sine wave.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path d="M10,20 L250,20" data-fx="wave"/>
+      </svg>
+    </section>
+
+    <section class="card">
+      <h3>morse</h3>
+      <p>Dot–dash pattern travels the path.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path d="M10,20 L250,20" data-fx="morse"/>
+      </svg>
+    </section>
+
+    <section class="card">
+      <h3>glow</h3>
+      <p>Drop-shadow pulses without moving the stroke.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path d="M10,20 L250,20" data-fx="glow"/>
+      </svg>
+    </section>
+
+    <section class="card">
+      <h3>silhouette</h3>
+      <p>Small shape rides the path via <code>offset-path</code>.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path id="sil-path" d="M10,20 C 80,-10 180,50 250,20"/>
+        <circle cx="0" cy="0" r="5" fill="var(--ak-diag-accent)"
+                data-fx="silhouette"
+                style="--ak-fx-path: path('M10,20 C 80,-10 180,50 250,20');"/>
+      </svg>
+    </section>
+
+    <section class="card">
+      <h3>pulse</h3>
+      <p>Stroke width + opacity breathe together.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path d="M10,20 L250,20" data-fx="pulse"/>
+      </svg>
+    </section>
+
+    <section class="card">
+      <h3>dashed-flow</h3>
+      <p>Slow ambient dash-drift for background structure.</p>
+      <svg viewBox="0 0 260 40" preserveAspectRatio="none">
+        <path d="M10,20 L250,20" data-fx="dashed-flow"/>
+      </svg>
+    </section>
+  </div>
+</body>
+</html>

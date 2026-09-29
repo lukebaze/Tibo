@@ -1,0 +1,17 @@
+name: web-testing
+version: "1.0.0"
+description: Web E2E and unit testing with Playwright, Vitest, k6 — bootstrap configs, fixtures, runners.
+
+# Declarative runtime block interpreted by the `ak` skill-env manager.
+# Behavior unchanged for users without the AGENTKIT_SKILL_RUNTIME=1 flag;
+# users with the flag get an isolated node_modules at
+# ~/.agentkit/cache/<hash>/node_modules instead of polluting the user's
+# project tree.
+runtime:
+  node:
+    version: ">=20"
+    packages:
+      - "@playwright/test@1.48.0"
+
+entrypoint:
+  node: scripts/init-playwright.js

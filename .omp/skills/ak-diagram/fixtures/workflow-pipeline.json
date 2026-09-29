@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Orchestrated Delivery Pipeline",
+    "subtitle": "Discovery loop, parallel implementation and gated release",
+    "description": "A denser workflow with a back edge, several steps per lane and a decision gate.",
+    "visual_preset": "classic",
+    "theme": "light",
+    "animation": "trace",
+    "views": [
+      { "id": "discover", "title": "Discovery", "narrative": "The orchestrator scouts the codebase and drafts a plan.", "focus_nodes": ["scout", "plan"] },
+      { "id": "build", "title": "Parallel build", "narrative": "Workers implement disjoint slices while tests run continuously.", "focus_nodes": ["impl-a", "impl-b", "test"] },
+      { "id": "release", "title": "Release gate", "narrative": "A reviewer decides whether the change ships or loops back.", "focus_nodes": ["review", "ship", "rework"] }
+    ]
+  },
+  "lanes": [
+    { "id": "orch", "label": "Orchestrator", "role": "controller" },
+    { "id": "workers", "label": "Pi Workers", "role": "executors" },
+    { "id": "gate", "label": "Review Gate", "role": "approver" }
+  ],
+  "steps": [
+    { "id": "start", "label": "Mission received", "lane": "orch", "kind": "start" },
+    { "id": "scout", "label": "Scout codebase", "lane": "orch", "kind": "action", "description": "Locate owners, contracts and tests." },
+    { "id": "plan", "label": "Draft plan", "lane": "orch", "kind": "action" },
+    { "id": "impl-a", "label": "Implement slice A", "lane": "workers", "kind": "subprocess" },
+    { "id": "impl-b", "label": "Implement slice B", "lane": "workers", "kind": "subprocess" },
+    { "id": "test", "label": "Run test matrix", "lane": "workers", "kind": "action" },
+    { "id": "wait", "label": "Await CI", "lane": "orch", "kind": "wait" },
+    { "id": "review", "label": "Approve release?", "lane": "gate", "kind": "decision" },
+    { "id": "rework", "label": "Request rework", "lane": "gate", "kind": "action" },
+    { "id": "ship", "label": "Shipped", "lane": "orch", "kind": "terminal-success" },
+    { "id": "abort", "label": "Aborted", "lane": "gate", "kind": "terminal-failure" }
+  ],
+  "transitions": [
+    { "from": "start", "to": "scout" },
+    { "from": "scout", "to": "plan", "label": "context" },
+    { "from": "plan", "to": "impl-a", "label": "slice A" },
+    { "from": "plan", "to": "impl-b", "label": "slice B" },
+    { "from": "impl-a", "to": "test" },
+    { "from": "impl-b", "to": "test" },
+    { "from": "test", "to": "wait", "label": "green" },
+    { "from": "wait", "to": "review" },
+    { "from": "review", "to": "ship", "label": "approve", "condition": "all checks green" },
+    { "from": "review", "to": "rework", "label": "changes requested" },
+    { "from": "review", "to": "abort", "label": "reject" },
+    { "from": "rework", "to": "plan", "label": "re-plan" },
+    { "from": "test", "to": "impl-a", "label": "red" }
+  ]
+}

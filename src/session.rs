@@ -64,9 +64,6 @@ impl Session {
                     PendingAction::Coding { agent, prompt, .. } => {
                         format!("{}: {}", agent.as_str(), prompt)
                     }
-                    PendingAction::ComputerUse { prompt } => {
-                        format!("computer_use: {prompt}")
-                    }
                     PendingAction::ForgetMemory { line } => {
                         format!("memory.forget: {}", line.as_deref().unwrap_or("toàn bộ"))
                     }
@@ -89,12 +86,19 @@ pub fn load() -> Session {
     let mut session = match fs::read(&path) {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(session) => session,
-            Err(_) => {
-                eprintln!("TIBO_SESSION corrupt; reset");
-                let session = Session::default();
-                let _ = save(&session);
-                session
-            }
+            Err(_) => match migrate_legacy_pending(&bytes) {
+                Some(session) => {
+                    eprintln!("TIBO_SESSION migrated legacy pending computer use");
+                    let _ = save(&session);
+                    session
+                }
+                None => {
+                    eprintln!("TIBO_SESSION corrupt; reset");
+                    let session = Session::default();
+                    let _ = save(&session);
+                    session
+                }
+            },
         },
         Err(error) if error.kind() == io::ErrorKind::NotFound => Session::default(),
         Err(error) => {
@@ -117,6 +121,16 @@ pub fn load() -> Session {
     refresh(&mut session);
     session
 }
+fn migrate_legacy_pending(bytes: &[u8]) -> Option<Session> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let pending = value.get_mut("pending_confirmation")?;
+    if pending.get("kind")?.as_str()? != "computer_use" {
+        return None;
+    }
+    *pending = serde_json::Value::Null;
+    serde_json::from_value(value).ok()
+}
+
 
 pub fn save(session: &Session) -> io::Result<()> {
     let path = path();
@@ -196,4 +210,37 @@ pub fn expand_home(path: &str) -> PathBuf {
         return PathBuf::from(env::var_os("HOME").unwrap_or_else(|| "/tmp".into())).join(rest);
     }
     Path::new(path).to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_computer_confirmation_is_removed_without_losing_active_task() {
+        let session = migrate_legacy_pending(
+            br#"{
+                "active": true,
+                "agent": "codex",
+                "command": "codex",
+                "task": "keep this task",
+                "status": "running",
+                "pid": 4242,
+                "pgid": 4242,
+                "log": null,
+                "started_at": "2026-09-29T10:00:00Z",
+                "pending_confirmation": {
+                    "kind": "computer_use",
+                    "prompt": "click something",
+                    "expires_at": "2026-09-29T10:02:00Z"
+                }
+            }"#,
+        )
+        .expect("legacy session should migrate");
+
+        assert!(session.active);
+        assert_eq!(session.task.as_deref(), Some("keep this task"));
+        assert_eq!(session.pid, Some(4242));
+        assert!(session.pending_confirmation.is_none());
+    }
 }

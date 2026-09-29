@@ -1,0 +1,77 @@
+{
+  "skill_name": "ak:page-builder",
+  "evals": [
+    {
+      "id": "adaptive-widget-sizing",
+      "split": "train",
+      "prompt": "Bổ sung resize kiểu widget cho ProductSummary hiện có: nhỏ/vừa/lớn có cách trình bày khác nhau. Cùng một trang desktop có cột chính và sidebar hẹp; human đổi size bằng touch, agent đổi qua API. Không làm mất nội dung khi thu nhỏ rồi phóng lớn. Viết sizing-design.md mô tả hợp đồng, cách vận hành và kiểm chứng; đây là bài thiết kế, không gọi production.",
+      "expected_output": "A concrete size/presentation contract and resize workflow that preserves content, handles container fit and keeps editor and agent operations consistent.",
+      "assertions": [
+        {"id":"artifact","text":"The sizing design exists.","kind":"file-exists","path":"sizing-design.md"},
+        {"id":"presentation","text":"Small/medium/large have meaningful different presentations of shared content rather than simple scaling or destructive truncation."},
+        {"id":"container","text":"Requested size is distinct from effective presentation; main/sidebar fit and unsupported-size behavior are deterministic."},
+        {"id":"interaction","text":"Touch resize, an accessible non-drag alternative and cancellation/undo preserve state and content."},
+        {"id":"operations","text":"Agent and editor resize share stable IDs, revision/idempotency validation, and operation feedback."},
+        {"id":"operator","text":"The design plans a project operator-skill refresh through the installed creator after resize interfaces are verified, covering actual recipes and troubleshooting without claiming execution."},
+        {"id":"evidence","text":"Proposed tests cover lossless round-trip, container boundaries and rendering parity without claiming actual execution."}
+      ]
+    },
+    {
+      "id": "existing-react-builder",
+      "split": "train",
+      "prompt": "In the provided storefront project, build a dynamic page builder from its existing Hero, ProductGrid and FAQ components. Agents need API, CLI, local and remote MCP, browser tools, preview and publishing. Keep the existing auth and database. Make the editor usable on phones and tablets and provide an operating skill for future agents. Use the supplied disposable environment; do not publish to production.",
+      "expected_output": "Working integration and project operator skill, backed by actual component, transport, mobile and lifecycle evidence.",
+      "assertions": [
+        {"id":"reuse","text":"Changes reuse source-backed host components, auth and storage rather than introducing competing owners."},
+        {"id":"operations","text":"Real page mutations through implemented interfaces share validation, scopes, revision and retry behavior."},
+        {"id":"mobile","text":"Evidence covers responsive editor and published output, touch alternatives, virtual keyboard and reconnect behavior."},
+        {"id":"creator","text":"Trace shows activation of the installed skill creator and a project operator skill with tested CLI/API/MCP recipes and troubleshooting."},
+        {"id":"delivery","text":"Preview/publication/rollback and public-only Markdown/SEO exports are verified, with unsupported environments explicitly identified."}
+      ]
+    },
+    {
+      "id": "non-react-preservation",
+      "split": "train",
+      "prompt": "Tích hợp trình dựng trang kéo thả vào project Vue được cung cấp, dùng các section đang có. Giữ CMS và backend hiện tại. MCP ưu tiên Cloudflare, editor phải dùng được bằng cảm ứng. Chạy lại setup để kiểm tra phần tùy biến của tôi còn nguyên.",
+      "expected_output": "A source-backed adapter integrates with the Vue host and preserves customization on rerun without assuming a React editor or replacing the backend.",
+      "assertions": [
+        {"id":"stack","text":"Implementation is based on the supplied framework and CMS rather than an unverified universal adapter claim."},
+        {"id":"preservation","text":"A second run preserves user-owned changes and does not duplicate content storage or configuration."},
+        {"id":"remote","text":"Remote MCP reaches the authorized host service; Cloudflare hosting is not assumed to expose a local filesystem."},
+        {"id":"operator","text":"Project operator instructions reflect the implemented interfaces and are produced through the installed creator."}
+      ]
+    },
+    {
+      "id": "operator-conflict-recovery",
+      "split": "train",
+      "prompt": "Using the supplied builder contract and incident record, write recovery.md for an agent. Its edit timed out, a human has edited the same page, the preview is from an older revision, and publication status is uncertain. Explain the exact next operations, when retries are safe, and how future agents should learn this builder. This is a read-only recovery exercise; do not call production.",
+      "expected_output": "An evidence-grounded recovery artifact distinguishes uncertain outcome, idempotent replay, concurrent human edits and exact-revision publication; it includes the project operator-skill workflow.",
+      "assertions": [
+        {"id":"artifact","text":"Recovery artifact exists.","kind":"file-exists","path":"recovery.md"},
+        {"id":"retry","text":"Recovery uses the original idempotency key/payload only for outcome lookup or exact retry, and reconciles current state before new edits."},
+        {"id":"publication","text":"Recovery resolves the existing publish job and stale preview without marking an unknown or different revision live."},
+        {"id":"creator","text":"Guidance explicitly activates the installed creator for a project-scoped operator skill grounded in real contracts and troubleshooting."},
+        {"id":"honesty","text":"The artifact respects the read-only constraint and does not fabricate execution, authorization or missing endpoints."}
+      ]
+    },
+    {
+      "id": "one-off-page-negative",
+      "split": "train",
+      "prompt": "Chỉnh khoảng cách và font chữ của trang giới thiệu hiện có cho đẹp trên mobile. Không thêm CMS hay trình biên tập.",
+      "expected_output": "Routing selects a suitable UI capability without constructing a page builder or generating an unrelated operator skill.",
+      "assertions": [
+        {"id":"routing","text":"Actual runtime trace does not activate page-builder for a one-off styling request."},
+        {"id":"scope","text":"Result stays within responsive spacing/typography changes and creates no builder infrastructure."}
+      ]
+    },
+    {
+      "id": "generic-mcp-negative",
+      "split": "train",
+      "prompt": "Expose this existing inventory API as a CLI and an MCP server. No page editor or content publishing is needed.",
+      "expected_output": "Routing chooses API agentization rather than page-builder.",
+      "assertions": [
+        {"id":"routing","text":"Actual runtime trace selects the matching API/CLI/MCP capability without activating page-builder."}
+      ]
+    }
+  ]
+}

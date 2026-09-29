@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ak:diagram process spec",
+  "type": "object",
+  "required": [
+    "steps"
+  ],
+  "properties": {
+    "variant": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "full"
+      ],
+      "default": "light"
+    },
+    "title": {
+      "type": "string"
+    },
+    "caption": {
+      "type": "string"
+    },
+    "accent": {
+      "type": "string"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

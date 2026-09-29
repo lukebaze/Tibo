@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clean fixture</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1a1a1a; background: #fff; }
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100dvh; }
+  .sidebar { background: #f4f4f5; padding: 24px; }
+  main { padding: 32px; }
+  .row { display: flex; flex-direction: column; gap: 4px; }
+  .btn { display: inline-block; min-height: 44px; padding: 10px 18px; background: #1d4ed8; color: #fff; border: 0; border-radius: 6px; }
+  dialog[open] { display: flex; }
+  @media (max-width: 767px) { .app { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar"><a href="#a">Overview</a></nav>
+  <main>
+    <h1>Appointments</h1>
+    <div class="row"><strong>Elena Vasquez</strong><span>Cleaning and polish</span></div>
+    <button class="btn" type="button">New appointment</button>
+    <dialog id="d"><p>Closed dialog</p></dialog>
+  </main>
+</div>
+</body>
+</html>

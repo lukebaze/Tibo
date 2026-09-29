@@ -1,0 +1,35 @@
+{
+  "fixture": "synthetic-third-party-action",
+  "note": "Synthetic input for the ak:docs handoff evaluation. No production, staging, or provider system was contacted, and every identifier below is a placeholder.",
+  "action": "first deploy to a managed hosting provider under an authorized task",
+  "provider": "example-hosting",
+  "dashboard": "provider console -> project -> deployments",
+  "account": {
+    "account_id": "acct-example-0001",
+    "project_id": "proj-example-0001",
+    "region": "example-region-1",
+    "environment": "production"
+  },
+  "log_source": {
+    "class": "application",
+    "locator": "provider console -> project -> logs -> application",
+    "lookup": "filter by deployment id, then by request id; bounded to a 15-minute window",
+    "timezone": "UTC",
+    "limit": "200 lines per query"
+  },
+  "credential": {
+    "name": "DEPLOY_API_TOKEN",
+    "store": "approved secret store -> item hosting-deploy",
+    "role": "deployer, metadata and use only",
+    "value": "not provided to this session"
+  },
+  "permissions": {
+    "held": "read application logs for proj-example-0001, 15-minute windows",
+    "missing": "read the credential value, which needs a separate scoped grant"
+  },
+  "observations": {
+    "deployment_id": "dep-example-0001",
+    "health": "primary flow responded 200",
+    "rollback": "provider console -> deployments -> roll back to the previous deployment id"
+  }
+}

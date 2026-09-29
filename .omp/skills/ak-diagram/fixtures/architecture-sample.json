@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Test Microservices",
+    "visual_preset": "signal-flow",
+    "theme": "dark",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "chap-1",
+        "title": "Ingress",
+        "narrative": "Traffic enters via Gateway",
+        "focus_nodes": ["gateway"]
+      },
+      {
+        "id": "chap-2",
+        "title": "Edge & Auth",
+        "narrative": "Gateway and Auth form the trust boundary",
+        "focus_nodes": ["gateway", "auth"]
+      }
+    ]
+  },
+  "components": [
+    { "id": "gateway", "label": "API Gateway", "role": "gateway", "layer": 0 },
+    { "id": "auth", "label": "Auth Service", "role": "auth", "layer": 1 },
+    { "id": "db", "label": "User DB", "role": "database", "layer": 2 }
+  ],
+  "connections": [
+    { "from": "gateway", "to": "auth", "label": "Token Check" },
+    { "from": "auth", "to": "db", "label": "Query Users" }
+  ]
+}

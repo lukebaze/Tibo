@@ -1,0 +1,3 @@
+name: ai-multimodal
+version: "1.1.0"
+description: Multimodal analysis and generation with native-vision-first routing before falling back to the npm-latest @mrgoonie/multix CLI.

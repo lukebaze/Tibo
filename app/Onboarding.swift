@@ -111,7 +111,6 @@ private struct OnboardingView: View {
     @AccessibilityFocusState private var errorFocused: Bool
     @State private var hovered = false
     @State private var woke = false
-    @State private var sample = "Hôm nay là thứ mấy? Gợi ý cho tôi một cách dùng Tibo."
     private let startNotch: () -> Void
     private let onFinish: () -> Void
 
@@ -194,10 +193,6 @@ private struct OnboardingView: View {
     private var finishView: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(draft.assistantName) đã sẵn sàng.").font(.title3.weight(.semibold))
-            Text("Câu hỏi đầu tiên").padding(.top, 4)
-            TextField("Câu hỏi đầu tiên", text: $sample, prompt: Text("Để trống nếu chưa muốn hỏi"))
-                .textFieldStyle(.roundedBorder).labelsHidden()
-            Text("\(draft.assistantName) sẽ trả lời câu này ngay khi bạn bấm Bắt đầu.").font(.caption).foregroundStyle(.secondary)
             Divider().padding(.vertical, 6)
             summaryRow("Gọi bằng", ([draft.assistantName] + draft.wakeWords).joined(separator: ", "))
             summaryRow("Bộ não AI", draft.agent == .pi && !draft.agentModel.isEmpty ? "pi · \(draft.agentModel)" : draft.agent.title)
@@ -254,8 +249,6 @@ private struct OnboardingView: View {
         draft.wakeWords = draft.wakeWords.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         store.save(draft)
         onFinish()
-        let question = sample.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !question.isEmpty { NotificationCenter.default.post(name: .tiboSubmit, object: question) }
     }
 }
 
@@ -767,7 +760,6 @@ private struct ListenPageView: View {
             }
             Section("Trả lời bằng giọng") {
                 Toggle("Cho \(draft.assistantName) nói", isOn: $draft.speakReplies)
-                Toggle("Đọc to mọi câu trả lời, kể cả khi hỏi bằng cách gõ", isOn: $draft.readEveryAnswer).disabled(!draft.speakReplies)
                 Text("Khi không đọc, câu trả lời hiện chữ trên notch.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Trí nhớ") {

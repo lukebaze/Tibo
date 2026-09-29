@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Auth Sequence Flow",
+    "visual_preset": "blueprint",
+    "theme": "dark"
+  },
+  "participants": [
+    { "id": "user", "label": "Browser", "role": "client" },
+    { "id": "api", "label": "API Gateway", "role": "gateway" },
+    { "id": "auth", "label": "Auth Service", "role": "service" },
+    { "id": "db", "label": "User Store", "role": "database" }
+  ],
+  "messages": [
+    { "from": "user", "to": "api", "label": "POST /login", "kind": "sync-call" },
+    { "from": "api", "to": "auth", "label": "Verify(creds)", "kind": "sync-call" },
+    { "from": "auth", "to": "db", "label": "SELECT user", "kind": "sync-call" },
+    { "from": "db", "to": "auth", "label": "user row", "kind": "return" },
+    { "from": "auth", "to": "api", "label": "JWT Token", "kind": "return" },
+    { "from": "api", "to": "user", "label": "200 OK + Cookie", "kind": "return" }
+  ]
+}

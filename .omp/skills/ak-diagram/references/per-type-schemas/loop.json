@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ak:diagram loop spec",
+  "type": "object",
+  "required": ["nodes"],
+  "properties": {
+    "variant": {"type": "string", "enum": ["light", "dark", "full"], "default": "light"},
+    "title": {"type": "string"},
+    "caption": {"type": "string"},
+    "accent": {"type": "string"},
+    "nodes": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 8,
+      "items": {"type": "string"}
+    },
+    "loop_label": {"type": "string", "description": "optional label on the return arrow"}
+  }
+}

@@ -282,6 +282,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     @Published var state: VoiceState = .listening
     @Published var transcript = "Nói “Tibo” để bắt đầu"
     @Published var summary = "Sẵn sàng"
+    @Published private(set) var progress = ""
     @Published var task = ""
     @Published var power: Float = -60
     @Published var micEnabled = true
@@ -289,13 +290,15 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     @Published private(set) var armed = false
     /// Recording an utterance right now.
     @Published private(set) var capturing = false
-    /// The current turn was addressed explicitly (typed or mic button), so no wake word is needed.
+    /// A mic button or approval button addresses the turn without a wake word.
     @Published private(set) var addressedTurn = false
-    /// Shown in the input placeholder instead of a spoken/caption error.
+    /// Visible error beneath the face, also announced to assistive technology.
     @Published private(set) var inputError: String?
     /// Replies that were not spoken stay on screen for a while.
     @Published private(set) var showAnswer = false
-    private var typedTurn = false
+    @Published private(set) var approvalPending = false
+    @Published private(set) var approvalSummary = ""
+    private var approvalExpiryRefresh: DispatchWorkItem?
     private var endRequested = false
     private var observers: Set<AnyCancellable> = []
 
@@ -347,6 +350,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private var nextAudioSequence = 0
     private var playingURL: URL?
     private var agentProcess: Process?
+    private var browserProcess: Process?
     private var agentReaders: [LineReader] = []
     /// pi turns (chat and workflows) run in one rpc process per conversation.
     private let pi = PiSession()
@@ -378,15 +382,13 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         super.init()
         transcript = "Nói “\(currentProfile.assistantName)” để bắt đầu"
         loadTask()
+        refreshPendingApproval()
         startTtsServer()
         if effectiveSttEngine == .whisper { startWhisperServer() }
         profileSubscription = store.$profile.sink { [weak self] profile in
             self?.profileChanged(profile)
         }
         requestPermissions()
-        NotificationCenter.default.publisher(for: .tiboSubmit).sink { [weak self] note in
-            if let text = note.object as? String { self?.submitTyped(text) }
-        }.store(in: &observers)
         NotificationCenter.default.publisher(for: .tiboModelReady).sink { [weak self] _ in
             guard let self, self.effectiveSttEngine == .whisper else { return }
             self.stopWhisperServer()
@@ -443,10 +445,6 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
-    private var speaksThisTurn: Bool {
-        currentProfile.speakReplies && (!typedTurn || currentProfile.readEveryAnswer)
-    }
-
     private func revealAnswer() {
         showAnswer = true
         let id = turnID
@@ -455,10 +453,9 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
-    func submitTyped(_ raw: String) {
-        // Typed/pasted Vietnamese can arrive decomposed (NFD); the backend's keyword fallback expects NFC.
-        let text = raw.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+    /// The approval buttons use the backend's addressed text path; there is no free-form input.
+    func resolveApproval(_ command: String) {
+        guard approvalPending, command == "xác nhận" || command == "huỷ" else { return }
         let wasResponding = isResponding
         cancelForeground(turn: turnID, markInterrupted: wasResponding)
         interrupted = wasResponding
@@ -469,19 +466,19 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         awaitingMore = false
         prefixTranscript = nil
         addressedTurn = true
-        typedTurn = true
         armed = false
         inputError = nil
         turnID += 1
         turnStartedAt = Date()
         loggedFirstAudio = false
         stateAfterPlayback = micEnabled ? .listening : .stopped
-        submit(transcript: text, turn: turnID, capturedURL: nil)
+        submit(transcript: command, turn: turnID, capturedURL: nil)
     }
 
     private var isResponding: Bool {
         backendProcess?.isRunning == true
             || agentProcess?.isRunning == true
+            || browserProcess?.isRunning == true
             || pi.busy
             || player?.isPlaying == true
             || !queuedAudio.isEmpty
@@ -616,7 +613,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         let speechConfirmed = speechGate == nil || now.timeIntervalSince(lastSpeechAt) < 0.4
         let mode = currentProfile.voiceMode
         let tapStart = armed && mode == .startStop
-        if writer == nil && (mode == .wake || armed) && (tapStart || (speechConfirmed && now.timeIntervalSince(lastSustainedOnset) < 0.6)) {
+        // ponytail: browser runs ignore ambient VAD; tap the mic to interrupt deliberately.
+        // Recognizing wake words concurrently would require a second non-cancelling turn pipeline.
+        if writer == nil && !(browserProcess?.isRunning == true && !armed)
+            && (mode == .wake || armed) && (tapStart || (speechConfirmed && now.timeIntervalSince(lastSustainedOnset) < 0.6)) {
             let prerollMs = Int(Double(preRollFrames) / targetFormat.sampleRate * 1000)
             let oldTurn = turnID
             let wasResponding = isResponding
@@ -627,9 +627,9 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
             loggedFirstAudio = false
             stateAfterPlayback = .listening
             addressedTurn = mode != .wake
-            typedTurn = false
             armed = false
             inputError = nil
+            progress = "Đang nghe…"
             do {
                 let newWriter = try WavWriter()
                 for buffered in preRoll { try newWriter.write(buffered) }
@@ -808,6 +808,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         recognitionTask = nil
         recognitionRequest = nil
         summary = "Đang nhận dạng giọng nói…"
+        progress = "Đang nhận dạng…"
         submit(arguments: ["--voice", "--audio", url.path, "--emit-text"], mode: "voice", turn: id, capturedURL: url)
         state = .transcribing
     }
@@ -816,6 +817,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         backendRunning = true
         state = .processing
         summary = mode == "text" ? "Đang hiểu yêu cầu…" : summary
+        if mode == "text" { progress = "Đang suy nghĩ…" }
         nextAudioSequence = 0
         let process = Process()
         let output = Pipe()
@@ -866,7 +868,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                     self.backendReaders.removeAll()
                     self.interrupted = false
                     print("TIBO_BACKEND exit turn_id=\(id) status=\(process.terminationStatus)")
-                    if self.state == .processing && self.agentProcess == nil { self.state = .listening }
+                    if self.state == .processing && !self.isResponding { self.state = .listening }
                 }
                 if let capturedURL { try? FileManager.default.removeItem(at: capturedURL) }
             }
@@ -885,25 +887,34 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     private func parseBackendLine(_ line: String, turn id: Int) {
         // Any of these means Tibo took the turn (an ignored one prints none of them).
         if ["TIBO_TURN incomplete", "TIBO_NATIVE_ACTION ", "TIBO_ROUTE_RESULT ", "TIBO_SAY ", "TIBO_LLM_REQUEST ", "TIBO_SCREEN_REQUEST "].contains(where: line.hasPrefix) {
+            if line != "TIBO_TURN incomplete" {
+                awaitingMore = false
+                prefixTranscript = nil
+            }
             keepAwake()
         }
         if line.hasPrefix("TRANSCRIPT: ") {
             transcript = String(line.dropFirst("TRANSCRIPT: ".count))
             print("TIBO_STT turn_id=\(id) text=\(transcript)")
             if state == .transcribing { state = .processing }
+            progress = "Đang suy nghĩ…"
             if addressedTurn && transcript.isEmpty { fail("\(currentProfile.assistantName) chưa nghe rõ, thử lại nhé") }
         } else if line == "WAKE" {
             print("TIBO_BACKEND WAKE turn_id=\(id)")
             NotificationCenter.default.post(name: .tiboWakeHeard, object: nil)
         } else if line.hasPrefix("STAGE ") {
+            if line.hasPrefix("STAGE intent_start_ms=") { progress = "Đang suy nghĩ…" }
             print("TIBO_BACKEND turn_id=\(id) \(line)")
             if line.hasPrefix("STAGE intent_done_ms=") {
                 print("TIBO_LATENCY turn_id=\(id) \(line.dropFirst("STAGE ".count))")
             }
+        } else if line.hasPrefix("TIBO_ROUTE_START ") {
+            progress = "Đang làm việc…"
         } else if line == "TIBO_TURN incomplete" {
             awaitingMore = true
             prefixTranscript = transcript
             summary = "Tôi đang nghe tiếp…"
+            progress = "Đang nghe tiếp…"
             state = .listening
             if currentProfile.voiceMode != .wake { armed = true }
         } else if line.hasPrefix("TIBO_NATIVE_ACTION ") {
@@ -919,7 +930,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 let result = try JSONDecoder().decode(RouteResult.self, from: Data(payload.utf8))
                 summary = result.summary
                 if result.command == "coding_task" { task = transcript }
-                if result.command == "computer_use" { Self.ensureControlPermissions() }
+                if result.status == "approval_required" { approvalSummary = result.summary }
+                refreshPendingApproval()
                 if result.status == "approval_required" {
                     state = .approval
                     awaitingMore = false
@@ -950,7 +962,12 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 print("TIBO_LLM_REQUEST malformed JSON ignored")
                 return
             }
-            startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, request.workflow.map { "workflow:\($0.id)" } ?? "conversation"), turn: id, workflow: request.workflow, conversational: request.workflow == nil)
+            refreshPendingApproval()
+            if request.workflow?.id == "trinh-duyet" {
+                startBrowser(prompt: request.prompt, turn: id)
+            } else {
+                startAgent(prompt: request.prompt, context: request.context, memoryTurn: (request.prompt, request.workflow.map { "workflow:\($0.id)" } ?? "conversation"), turn: id, workflow: request.workflow, conversational: request.workflow == nil)
+            }
         } else if line == "TIBO_MEMORY_CHANGED" {
             // The chat session got the memory block when it started; the next chat starts fresh.
             pi.stop()
@@ -964,12 +981,28 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
-    /// The omp computer tool runs as Tibo's child, so macOS checks Tibo's own Screen Recording and
-    /// Accessibility grants. Ask when a control task is proposed, before the user confirms it.
-    private static func ensureControlPermissions() {
-        if !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
-        if !AXIsProcessTrusted() {
-            AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+    private func refreshPendingApproval() {
+        approvalExpiryRefresh?.cancel()
+        approvalExpiryRefresh = nil
+        let url = ProfileStore.dataDir.appendingPathComponent("session.json")
+        let data = try? Data(contentsOf: url)
+        let session = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let pending = session?["pending_confirmation"] as? [String: Any]
+        let expires = pending?["expires_at"] as? String ?? ""
+        let expiry = ISO8601DateFormatter().date(from: expires)
+            ?? TimeInterval(expires).map { Date(timeIntervalSince1970: $0) }
+        approvalPending = expiry.map { $0 > Date() } ?? false
+        if approvalPending, let expiry {
+            if approvalSummary.isEmpty { approvalSummary = "Chờ xác nhận thao tác" }
+            let refresh = DispatchWorkItem { [weak self] in self?.refreshPendingApproval() }
+            approvalExpiryRefresh = refresh
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + max(0, expiry.timeIntervalSinceNow) + 0.1,
+                execute: refresh
+            )
+        } else {
+            approvalSummary = ""
+            if state == .approval { state = micEnabled ? .listening : .stopped }
         }
     }
 
@@ -1086,6 +1119,76 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         }
     }
 
+    /// Browser workflow: one approved voice command drives Chrome directly, without waiting for
+    /// a second agent to translate the request into shell commands.
+    private func startBrowser(prompt: String, turn id: Int) {
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("jev-ultrafast")
+        let script = root.appendingPathComponent("scripts/agent_run.py")
+        guard FileManager.default.fileExists(atPath: script.path),
+              let uv = AgentCLI.searchPath.lazy.map({ URL(fileURLWithPath: $0).appendingPathComponent("uv") })
+                .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            fail("Chưa cài Jev Ultrafast tại ~/jev-ultrafast.")
+            sendTts(text: summary, final: true, turn: id)
+            return
+        }
+        let text = prompt.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "vi_VN"))
+        let startURL = text.contains("youtube") ? "https://www.youtube.com/" :
+            text.contains("wikipedia") ? "https://en.wikipedia.org/wiki/Main_Page" : "https://www.google.com/"
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("tibo-browser-\(UUID().uuidString).json")
+        FileManager.default.createFile(atPath: output.path, contents: nil)
+        guard let file = try? FileHandle(forWritingTo: output) else {
+            fail("Không tạo được tệp kết quả trình duyệt.")
+            sendTts(text: summary, final: true, turn: id)
+            return
+        }
+        let process = Process()
+        process.executableURL = uv
+        process.currentDirectoryURL = root
+        process.arguments = ["run", "python", "scripts/agent_run.py", "--url", startURL,
+                             "--goal", "\(prompt). Never log in, pay, purchase, send messages, edit or delete; stop before such steps.",
+                             "--budget", "90", "--json"]
+        process.environment = AgentCLI.environment()
+        process.standardOutput = file
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] process in
+            file.closeFile()
+            let data = try? Data(contentsOf: output)
+            try? FileManager.default.removeItem(at: output)
+            DispatchQueue.main.async {
+                guard let self, id == self.turnID else { return }
+                self.browserProcess = nil
+                let result = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                let succeeded = process.terminationStatus == 0 && result?["ok"] as? Bool == true
+                let title = result?["page_title"] as? String ?? ""
+                let url = result?["final_url"] as? String ?? ""
+                let reply = succeeded && !title.isEmpty && !url.isEmpty
+                    ? "Đã mở \(title) trên Chrome. Bạn xem lại trang nhé."
+                    : "Chưa duyệt web xong: \(result?["error"] as? String ?? result?["status"] as? String ?? "trình duyệt không phản hồi")."
+                self.summary = reply
+                if !succeeded { self.fail(reply) }
+                else { self.logMemoryTurn(user: prompt, tibo: reply, route: "workflow:trinh-duyet") }
+                self.sendTts(text: reply, final: true, turn: id)
+                print("TIBO_BROWSER turn_id=\(id) status=\(succeeded ? "done" : "failed") url=\(url)")
+            }
+        }
+        summary = "Đang duyệt web…"
+        progress = summary
+        state = .processing
+        do {
+            try process.run()
+            browserProcess = process
+            DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in
+                guard let self, id == self.turnID, self.browserProcess === process, process.isRunning else { return }
+                terminateTree(process)
+            }
+        } catch {
+            file.closeFile()
+            try? FileManager.default.removeItem(at: output)
+            fail("Không khởi chạy được trình duyệt: \(error.localizedDescription)")
+            sendTts(text: summary, final: true, turn: id)
+        }
+    }
+
     /// `image` is attached for vision turns (pi/omp `@file`, codex `-i`) and deleted when the agent exits.
     /// Claude Code runs with no tools here, so it only gets the OCR text already in `prompt`.
     /// A `workflow` turn is the one place an agent may run commands: one-shot, bash only.
@@ -1148,6 +1251,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         agentMemoryTurn = memoryTurn
         llmStartedAt = Date()
         summary = ""
+        progress = "Đang làm việc…"
         state = .processing
         let stdoutReader = LineReader { [weak self] line in
             DispatchQueue.main.async {
@@ -1218,6 +1322,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         agentMemoryTurn = memoryTurn
         llmStartedAt = Date()
         summary = ""
+        progress = "Đang làm việc…"
         state = .processing
         pi.prompt(prompt, turn: id)
     }
@@ -1290,6 +1395,10 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
            event["type"] as? String == "text_delta",
            let text = event["delta"] as? String {
             emitAgentDelta(text, turn: id)
+        } else if type == "tool_execution_start", let name = object["toolName"] as? String {
+            progress = "Đang gọi công cụ: \(name.prefix(24))…"
+        } else if type == "tool_execution_end" {
+            progress = "Đang suy nghĩ…"
         } else if type == "agent_end" {
             finishAgent(turn: id, failed: false)
         }
@@ -1309,6 +1418,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
 
     private func emitAgentDelta(_ text: String, turn id: Int) {
         guard id == turnID, !text.isEmpty else { return }
+        progress = "Đang trả lời…"
         if !llmReceivedText {
             llmReceivedText = true
             let ms = Int(Date().timeIntervalSince(llmStartedAt) * 1000)
@@ -1485,6 +1595,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         backendRunning = false
         if let agentProcess { terminateTree(agentProcess) }
         agentProcess = nil
+        if let browserProcess { terminateTree(browserProcess) }
+        browserProcess = nil
         pi.abort()
         sendTtsCancel(turn: oldID)
         queuedAudio.values.forEach { try? FileManager.default.removeItem(at: $0) }
@@ -1497,6 +1609,7 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
         nextAudioSequence = 0
         ttsResponsePending = false
         showAnswer = false
+        progress = ""
         nativeActionTurn = nil
         nativeActionFailedTurn = nil
         pendingNativeSay = nil
@@ -1515,7 +1628,8 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
     }
 
     private func sendTts(text: String, final: Bool, turn id: Int) {
-        guard speaksThisTurn else {
+        if final { progress = "Đang tạo giọng nói…" }
+        guard currentProfile.speakReplies else {
             if final {
                 revealAnswer()
                 if state != .approval { state = stateAfterPlayback }
@@ -1625,7 +1739,6 @@ private final class NotchController: ObservableObject {
     static let panelSize = NSSize(width: 440, height: 440)
     static let expandedWidth: CGFloat = 300
     @Published private(set) var expanded = false
-    @Published private(set) var typing = false
     @Published private(set) var barHeight: CGFloat = 32
     @Published private(set) var pillWidth: CGFloat = 250
     @Published private(set) var popupWidth: CGFloat = expandedWidth
@@ -1704,19 +1817,17 @@ private final class NotchController: ObservableObject {
         if pillWidth != pill { pillWidth = pill }
         if popupWidth != popup { popupWidth = popup }
         if position != profile.notchPosition { position = profile.notchPosition }
-        if typing != panel.isKeyWindow { typing = panel.isKeyWindow }
         let top = screen.frame
         let size = Self.panelSize
         let frame = NSRect(x: x(width: size.width, in: top), y: top.maxY - size.height, width: size.width, height: size.height)
         if panel.frame != frame { panel.setFrame(frame, display: true) }
 
-        let inputRow = typing || voice.inputError != nil || voice.voiceMode != .wake
-        let visible = expanded ? NSSize(width: popupWidth, height: barHeight + (typing ? 296 : inputRow ? 206 : 156)) : NSSize(width: pillWidth, height: barHeight)
+        let visible = expanded ? NSSize(width: popupWidth, height: barHeight + (voice.approvalPending ? 266 : voice.voiceMode != .wake ? 206 : 156)) : NSSize(width: pillWidth, height: barHeight)
         let margin = CGFloat(profile.hoverMargin)
         hotRect = NSRect(x: x(width: visible.width, in: top), y: top.maxY - visible.height, width: visible.width, height: visible.height).insetBy(dx: -margin, dy: -margin)
         let hovering = hotRect.contains(NSEvent.mouseLocation)
         if hovering { hoverSince = hoverSince ?? Date() } else { hoverSince = nil }
-        let busy = voice.state == .processing || voice.state == .speaking || voice.state == .approval || voice.engaged
+        let busy = voice.inputError != nil || voice.state == .processing || voice.state == .speaking || voice.approvalPending || voice.engaged
         if hovering || busy || panel.isKeyWindow { lastActive = Date() }
         if !expanded && (busy || (hoverSince.map { Date().timeIntervalSince($0) >= openDelay(screen) } ?? false)) {
             setExpanded(true)
@@ -1792,8 +1903,6 @@ private struct NotchShape: Shape {
 private struct ContentView: View {
     @ObservedObject var voice: VoiceController
     @ObservedObject var notch: NotchController
-    @State private var draft = ""
-    @FocusState private var inputFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var reaction: BuddyFace.Mood?
     @State private var reactionID = 0
@@ -1819,9 +1928,7 @@ private struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: notch.position == .left ? .topLeading : notch.position == .right ? .topTrailing : .top)
         .environment(\.colorScheme, .dark)
         .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.8), value: notch.expanded)
-        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: notch.typing)
         .animation(.easeInOut(duration: 0.2), value: caption)
-        .onChange(of: notch.typing) { _, typing in inputFocused = typing }
         .onChange(of: voice.state) { old, new in
             if old == .speaking && new != .speaking { react(.happy, for: 2.2) }
             if [.processing, .transcribing, .approval, .stopped].contains(new) {
@@ -1868,67 +1975,17 @@ private struct ContentView: View {
                     .padding(.horizontal, 20)
                     .transition(.opacity)
             }
-            if showsInput {
-                inputRow
-                    .padding(.horizontal, 4)
-                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-                ForEach(matches, id: \.name) { command in
-                    Button { run(command) } label: {
-                        HStack {
-                            Text(command.name).font(.system(size: 12, design: .monospaced)).foregroundStyle(.white.opacity(0.5))
-                            Text(command.label).foregroundStyle(.white)
-                            Spacer()
-                        }
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .accessibilityLabel("\(command.name), \(command.label)")
+            if voice.approvalPending {
+                HStack(spacing: 8) {
+                    Button("Huỷ") { voice.resolveApproval("huỷ") }
+                        .accessibilityHint("Bỏ qua thao tác đang chờ")
+                    Button("Xác nhận") { voice.resolveApproval("xác nhận") }
+                        .accessibilityHint("Cho phép thực hiện thao tác đang chờ")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .frame(minHeight: 44)
             }
-        }
-        .padding(.top, notch.barHeight)
-        .padding(.bottom, 12)
-        .onExitCommand { notch.collapse() }
-    }
-
-    private var showsInput: Bool { notch.typing || voice.inputError != nil || voice.voiceMode != .wake }
-
-    /// Status line under the face: live listening hints first, then spoken/unspoken answers.
-    private var caption: String? {
-        if voice.capturing && voice.addressedTurn {
-            return voice.voiceMode == .startStop ? "Đang nghe… bấm mic để gửi" : "Đang nghe… ngừng nói để gửi"
-        }
-        if voice.armed { return "Mời bạn nói…" }
-        if voice.state == .transcribing && voice.addressedTurn { return voice.state.rawValue }
-        if (voice.state == .speaking || voice.state == .approval || voice.showAnswer) && !voice.summary.isEmpty { return voice.summary }
-        return nil
-    }
-
-    private var inputRow: some View {
-        HStack(spacing: 2) {
-            TextField("", text: $draft, prompt: Text(voice.inputError ?? "Hỏi \(notch.store.profile.assistantName)…")
-                .foregroundStyle(voice.inputError == nil ? Color.white.opacity(0.55) : Color.red.opacity(0.9)))
-                .textFieldStyle(.plain)
-                .font(.system(size: 14, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(minWidth: 0, maxWidth: .infinity)
-                .focused($inputFocused)
-                .onSubmit {
-                    if let command = matches.first { run(command); return }
-                    voice.submitTyped(draft)
-                    draft = ""
-                }
-                .accessibilityLabel(voice.inputError.map { "Lỗi: \($0). Nhập yêu cầu" } ?? "Nhập yêu cầu")
-            Button { draft = "/" ; inputFocused = true } label: {
-                Image(systemName: "square.grid.2x2")
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.7))
-            .accessibilityLabel("Lệnh nhanh")
             if voice.voiceMode != .wake {
                 Button(action: voice.tapMic) {
                     Image(systemName: voice.capturing ? "stop.circle.fill" : "mic.circle.fill")
@@ -1941,41 +1998,25 @@ private struct ContentView: View {
                 .accessibilityLabel(voice.capturing ? "Gửi" : voice.armed ? "Huỷ nghe" : "Nói")
             }
         }
-        .padding(.horizontal, 6)
-        .frame(minHeight: 44)
-        .background(.white.opacity(0.1), in: Capsule())
+        .padding(.top, notch.barHeight)
+        .padding(.bottom, 12)
+        .onExitCommand { notch.collapse() }
     }
 
-    private struct SlashCommand {
-        let name: String
-        let label: String
-        let run: @MainActor () -> Void
-    }
-
-    private var commands: [SlashCommand] {
-        let store = notch.store
-        return [
-            SlashCommand(name: "/caidat", label: "Mở Cài đặt") { notch.collapse(); TiboWindows.showSettings(store: store) },
-            SlashCommand(name: "/mic", label: voice.micEnabled ? "Tắt microphone" : "Bật microphone") { voice.toggleMicrophone() },
-            SlashCommand(name: "/dung", label: "Ngắt câu đang nói") { voice.stopPlayback() },
-            SlashCommand(name: "/giong", label: store.profile.speakReplies ? "Tắt giọng trả lời" : "Bật giọng trả lời") {
-                var profile = store.profile
-                profile.speakReplies.toggle()
-                store.save(profile)
-            },
-            SlashCommand(name: "/thoat", label: "Thoát") { NSApp.terminate(nil) },
-        ]
-    }
-
-    private var matches: [SlashCommand] {
-        let typed = draft.trimmingCharacters(in: .whitespaces).lowercased()
-        guard typed.hasPrefix("/") else { return [] }
-        return commands.filter { $0.name.hasPrefix(typed) }
-    }
-
-    private func run(_ command: SlashCommand) {
-        draft = ""
-        command.run()
+    /// Status line under the face: live listening hints first, then spoken/unspoken answers.
+    private var caption: String? {
+        if let error = voice.inputError { return error }
+        if voice.approvalPending { return voice.approvalSummary }
+        if voice.capturing && voice.addressedTurn {
+            return voice.voiceMode == .startStop ? "Đang nghe… bấm mic để gửi" : "Đang nghe… ngừng nói để gửi"
+        }
+        if voice.armed { return "Mời bạn nói…" }
+        if voice.state == .transcribing && voice.addressedTurn { return voice.state.rawValue }
+        if voice.state == .processing || voice.state == .transcribing || voice.capturing {
+            return voice.progress.isEmpty ? voice.state.rawValue : voice.progress
+        }
+        if (voice.state == .speaking || voice.state == .approval || voice.showAnswer) && !voice.summary.isEmpty { return voice.summary }
+        return nil
     }
 
     private var level: CGFloat { max(0, min(1, CGFloat((voice.power + 60) / 60))) }

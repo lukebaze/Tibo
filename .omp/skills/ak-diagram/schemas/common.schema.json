@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentkit.best/schemas/diagram/common.schema.json",
+  "title": "DiagramCommonDefinitions",
+  "type": "object",
+  "definitions": {
+    "Identifier": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+      "description": "Unique semantic identifier within the diagram"
+    },
+    "SafeText": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "Safe authored plain text string"
+    },
+    "VisualPreset": {
+      "type": "string",
+      "enum": ["classic", "signal-flow", "blueprint", "editorial"],
+      "default": "classic"
+    },
+    "Theme": {
+      "type": "string",
+      "enum": ["light", "dark"],
+      "default": "light"
+    },
+    "AnimationMode": {
+      "type": "string",
+      "enum": ["none", "trace"],
+      "default": "none"
+    },
+    "DiagramMeta": {
+      "type": "object",
+      "required": ["title"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "$ref": "#/definitions/SafeText" },
+        "subtitle": { "$ref": "#/definitions/SafeText" },
+        "description": { "$ref": "#/definitions/SafeText" },
+        "locale": { "type": "string", "maxLength": 16, "default": "en" },
+        "visual_preset": { "$ref": "#/definitions/VisualPreset" },
+        "theme": { "$ref": "#/definitions/Theme" },
+        "animation": { "$ref": "#/definitions/AnimationMode" },
+        "views": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "$ref": "#/definitions/StoryChapter" }
+        }
+      }
+    },
+    "StoryChapter": {
+      "type": "object",
+      "required": ["id", "title"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/definitions/Identifier" },
+        "title": { "$ref": "#/definitions/SafeText" },
+        "narrative": { "$ref": "#/definitions/SafeText" },
+        "focus_nodes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Identifier" }
+        },
+        "highlight_route": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Identifier" }
+        }
+      }
+    }
+  }
+}

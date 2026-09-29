@@ -1,0 +1,45 @@
+{
+  "fixture": "synthetic-tool-catalog",
+  "note": "Synthetic capabilities for the ak:docs handoff evaluation. Describes what a consumer runtime may call in this fixture; it is not a claim about any real installation.",
+  "tools": [
+    {
+      "name": "provider-console",
+      "kind": "ui",
+      "scope": "read",
+      "notes": "navigation only; no query API"
+    },
+    {
+      "name": "provider-logs-cli",
+      "kind": "cli",
+      "scope": "read",
+      "notes": "requires the provider session and the project id"
+    },
+    {
+      "name": "secret-store-cli",
+      "kind": "cli",
+      "scope": "metadata-read",
+      "notes": "returns item metadata and locators; reading a value needs a separate grant"
+    },
+    {
+      "name": "docs-write",
+      "kind": "filesystem",
+      "scope": "write",
+      "notes": "writes inside the project only"
+    }
+  ],
+  "permissions": [
+    {
+      "action": "read application logs",
+      "environment": "production",
+      "data_class": "operational",
+      "granted": "one project, 15-minute windows"
+    },
+    {
+      "action": "read a credential value",
+      "environment": "production",
+      "data_class": "secret",
+      "granted": false,
+      "request_path": "the project owner approves a scoped read grant"
+    }
+  ]
+}

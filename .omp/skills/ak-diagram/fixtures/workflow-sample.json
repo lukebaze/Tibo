@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Release Workflow",
+    "visual_preset": "classic",
+    "theme": "light",
+    "animation": "none"
+  },
+  "lanes": [
+    { "id": "dev", "label": "Developer", "role": "user" },
+    { "id": "ci", "label": "CI Runner", "role": "system" },
+    { "id": "qa", "label": "QA Lead", "role": "approver" }
+  ],
+  "steps": [
+    { "id": "commit", "label": "Push Commit", "lane": "dev", "kind": "action" },
+    { "id": "test", "label": "Run Matrix", "lane": "ci", "kind": "action" },
+    { "id": "gate", "label": "Audit Gate", "lane": "qa", "kind": "decision" },
+    { "id": "ship", "label": "Deploy Beta", "lane": "ci", "kind": "terminal-success" }
+  ],
+  "transitions": [
+    { "from": "commit", "to": "test", "label": "Trigger" },
+    { "from": "test", "to": "gate", "label": "Pass" },
+    { "from": "gate", "to": "ship", "label": "Approve", "kind": "branch-true" }
+  ]
+}

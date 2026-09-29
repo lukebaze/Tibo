@@ -86,13 +86,25 @@ impl JevClient {
         if fixture.is_none() && api_key.is_empty() {
             return Err(JevError::Transport("TYPESAFE_API_KEY is required".into()));
         }
+        let openrouter = api_key.starts_with("sk-or-");
+        let base = env::var("TIBO_JEV_BASE").unwrap_or_else(|_| {
+            if openrouter {
+                "https://openrouter.ai/api".into()
+            } else {
+                "https://api.typesafe.ai".into()
+            }
+        });
+        let model = env::var("TIBO_JEV_MODEL").unwrap_or_else(|_| {
+            if openrouter {
+                "typesafe/jev-1.13".into()
+            } else {
+                "jev-1.13.0".into()
+            }
+        });
         Ok(Self {
             api_key,
-            base: env::var("TIBO_JEV_BASE")
-                .unwrap_or_else(|_| "https://api.typesafe.ai".into())
-                .trim_end_matches('/')
-                .into(),
-            model: env::var("TIBO_JEV_MODEL").unwrap_or_else(|_| "jev-1.13.0".into()),
+            base: base.trim_end_matches('/').into(),
+            model,
             timeout_ms: env::var("TIBO_JEV_TIMEOUT_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())

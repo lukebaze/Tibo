@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebMCP starter (imperative + declarative)</title>
+  <!--
+    WebMCP requirements:
+      - Serve over HTTPS (or localhost).
+      - Document MUST be origin-isolated. Do NOT send `Origin-Agent-Cluster: ?0`
+        and do NOT set document.domain, or WebMCP is disabled at registration.
+      - Enable chrome://flags/#enable-webmcp-testing (Chrome 149+) for local dev,
+        or ship the Chrome origin-trial token in production.
+    Feature-detect: WebMCP is a progressive enhancement, never a dependency.
+  -->
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; }
+    form:tool-form-active { outline: light-dark(blue, cyan) dashed 1px; outline-offset: -1px; }
+    button:tool-submit-active { outline: light-dark(red, pink) dashed 1px; outline-offset: -1px; }
+    #todos li { margin: 0.2rem 0; }
+  </style>
+</head>
+<body>
+  <h1>To-do (WebMCP demo)</h1>
+
+  <ul id="todos"></ul>
+
+  <!-- Declarative tool: a plain form becomes an agent-callable tool. -->
+  <form id="search"
+        toolname="search_todos"
+        tooldescription="Search the to-do list for items matching a keyword."
+        action="#" toolautosubmit>
+    <label for="q">Keyword</label>
+    <input type="text" name="q" id="q"
+           toolparamdescription="Keyword to match against to-do text.">
+    <button type="submit">Search</button>
+  </form>
+
+  <p id="status" aria-live="polite"></p>
+
+  <script type="module">
+    const todos = [];
+    const listEl = document.getElementById('todos');
+    const statusEl = document.getElementById('status');
+    const render = () => {
+      listEl.replaceChildren(...todos.map((t) => {
+        const li = document.createElement('li');
+        li.textContent = t;
+        return li;
+      }));
+    };
+
+    // Declarative: return structured output to the agent on agent-driven submit.
+    document.getElementById('search').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const q = new FormData(e.target).get('q')?.toString().toLowerCase() ?? '';
+      const hits = todos.filter((t) => t.toLowerCase().includes(q));
+      statusEl.textContent = `Found ${hits.length} match(es).`;
+      if (e.agentInvoked) e.respondWith(Promise.resolve(JSON.stringify(hits)));
+    });
+
+    // Progressive enhancement: only register imperative tools if supported.
+    if ('modelContext' in document) {
+      document.modelContext.registerTool({
+        name: 'add_todo',
+        title: 'Add a to-do',
+        description: 'Add a new item to the to-do list. Accepts the item text as a string.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'The to-do item text to add.' },
+          },
+          required: ['text'],
+        },
+        execute: async ({ text }) => {
+          todos.push(text);
+          render();
+          return `Added to-do: ${text}`;
+        },
+      });
+
+      document.modelContext.registerTool({
+        name: 'list_todos',
+        title: 'List to-dos',
+        description: 'Return all current to-do items as a JSON array of strings.',
+        inputSchema: { type: 'object', properties: {} },
+        // Returns user-entered text -> mark untrusted so the agent sanitizes it.
+        annotations: { readOnlyHint: true, untrustedContentHint: true },
+        execute: async () => JSON.stringify(todos),
+      });
+
+      document.modelContext.addEventListener('toolchange', () => {
+        // Tools changed - refresh any in-page tool UI here.
+      });
+    } else {
+      statusEl.textContent = 'WebMCP not available in this browser/context.';
+    }
+  </script>
+</body>
+</html>

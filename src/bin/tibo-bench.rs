@@ -94,7 +94,7 @@ fn run() -> Result<bool, String> {
         }
         if matches!(
             decision,
-            Decision::Ignore { .. } | Decision::Incomplete | Decision::Clarify { .. }
+            Decision::Ignore { .. } | Decision::Incomplete | Decision::Clarify { .. } | Decision::UnsupportedComputerUse
         ) {
             clarified += 1;
         }
@@ -148,7 +148,10 @@ fn parse(input: &str) -> Result<Vec<Case>, String> {
 }
 
 fn matches_case(case: &Case, decision: &Decision) -> bool {
-    if case.risk_min >= 1.5 && !matches!(decision, Decision::NeedConfirm { .. }) {
+    if case.risk_min >= 1.5
+        && !(matches!(decision, Decision::NeedConfirm { .. })
+            || case.route == "computer_use" && case.action == "general" && matches!(decision, Decision::UnsupportedComputerUse))
+    {
         return false;
     }
     match (case.route.as_str(), decision) {
@@ -173,13 +176,7 @@ fn matches_case(case: &Case, decision: &Decision) -> bool {
         ) => case.agent == "unspecified" || case.agent == agent.as_str(),
         ("session_control", Decision::Session(action)) => case.action == action_name(action),
         ("computer_use", Decision::OpenApp { .. }) => case.action != "general",
-        (
-            "computer_use",
-            Decision::NeedConfirm {
-                pending: PendingAction::ComputerUse { .. },
-                ..
-            },
-        ) => case.action != "open_app",
+        ("computer_use", Decision::UnsupportedComputerUse) => case.action == "general",
         ("conversation", Decision::Chat) => true,
         _ => false,
     }

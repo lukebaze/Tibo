@@ -1,0 +1,116 @@
+/*
+ * ak:diagram design tokens
+ * Editorial contract: 1 accent color, restrained palette, density 4/10.
+ * Every template imports this file; do not fork per-type.
+ */
+
+:root {
+  /* Neutrals — 4-step scale */
+  --ak-diag-ink: #0f172a;
+  --ak-diag-ink-muted: #475569;
+  --ak-diag-ink-subtle: #94a3b8;
+  --ak-diag-paper: #ffffff;
+  --ak-diag-paper-soft: #f8fafc;
+  --ak-diag-rule: #e2e8f0;
+
+  /* Accent — reserved for 1–2 focal points per diagram */
+  --ak-diag-accent: #2563eb;
+  --ak-diag-accent-soft: #dbeafe;
+  --ak-diag-accent-ink: #1e40af;
+
+  /* Semantic — sparse use only */
+  --ak-diag-ok: #059669;
+  --ak-diag-warn: #d97706;
+  --ak-diag-risk: #dc2626;
+
+  /* Type scale */
+  --ak-diag-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ak-diag-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono",
+    Menlo, Consolas, monospace;
+  --ak-diag-size-xs: 11px;
+  --ak-diag-size-sm: 13px;
+  --ak-diag-size-base: 15px;
+  --ak-diag-size-lg: 18px;
+  --ak-diag-size-xl: 24px;
+  --ak-diag-size-2xl: 32px;
+
+  /* Spacing */
+  --ak-diag-space-1: 4px;
+  --ak-diag-space-2: 8px;
+  --ak-diag-space-3: 12px;
+  --ak-diag-space-4: 16px;
+  --ak-diag-space-6: 24px;
+  --ak-diag-space-8: 32px;
+  --ak-diag-space-12: 48px;
+  --ak-diag-space-16: 64px;
+
+  /* Stroke */
+  --ak-diag-stroke-hair: 1px;
+  --ak-diag-stroke-line: 1.5px;
+  --ak-diag-stroke-bold: 2.5px;
+
+  /* Radius */
+  --ak-diag-radius-none: 0;
+  --ak-diag-radius-sm: 2px;
+  --ak-diag-radius-md: 6px;
+}
+
+[data-theme="dark"] {
+  --ak-diag-ink: #f1f5f9;
+  --ak-diag-ink-muted: #94a3b8;
+  --ak-diag-ink-subtle: #64748b;
+  --ak-diag-paper: #0b1120;
+  --ak-diag-paper-soft: #111827;
+  --ak-diag-rule: #1e293b;
+  --ak-diag-accent: #60a5fa;
+  --ak-diag-accent-soft: #172554;
+  --ak-diag-accent-ink: #bfdbfe;
+}
+
+/* Base surface */
+.ak-diag {
+  font-family: var(--ak-diag-font);
+  font-size: var(--ak-diag-size-base);
+  color: var(--ak-diag-ink);
+  background: var(--ak-diag-paper);
+  line-height: 1.5;
+  padding: var(--ak-diag-space-8);
+}
+
+/* Editorial frame chrome */
+.ak-diag__title {
+  font-size: var(--ak-diag-size-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--ak-diag-space-2);
+}
+
+.ak-diag__caption {
+  font-size: var(--ak-diag-size-sm);
+  color: var(--ak-diag-ink-muted);
+  margin: 0 0 var(--ak-diag-space-6);
+  max-width: 60ch;
+}
+
+.ak-diag__footnote {
+  font-size: var(--ak-diag-size-xs);
+  color: var(--ak-diag-ink-subtle);
+  border-top: var(--ak-diag-stroke-hair) solid var(--ak-diag-rule);
+  padding-top: var(--ak-diag-space-3);
+  margin-top: var(--ak-diag-space-8);
+}
+
+/* Focal-point utility — apply to the 1–2 elements the reader should notice first */
+.ak-diag__focal {
+  color: var(--ak-diag-accent-ink);
+  border-color: var(--ak-diag-accent);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .ak-diag * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

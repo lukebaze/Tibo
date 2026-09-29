@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Adversarial </script><script>alert('xss')</script>",
+    "visual_preset": "classic",
+    "theme": "light"
+  },
+  "components": [
+    { "id": "node1", "label": "Node 1 <script>alert(1)</script>", "role": "backend", "layer": 0 },
+    { "id": "node2", "label": "Node 2 </script>", "role": "database", "layer": 1 }
+  ],
+  "connections": [
+    { "from": "node1", "to": "node2", "label": "Call </script>" }
+  ]
+}

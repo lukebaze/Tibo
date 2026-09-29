@@ -1,17 +1,43 @@
 use tibo::{
     audio, handlers,
-    jev::JevClient,
+    jev::{Answer, Answers, JevClient},
     memory, policy,
     profile,
     questions::{self, Thresholds, Turn},
     session, tts, workflow,
 };
 use std::{
+    collections::HashSet,
     env, fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::PathBuf,
     process::{Command, ExitCode},
 };
+
+use serde::{Deserialize, Serialize};
+
+const COMPUTER_PLAN_NO_MATCH: &str = "no_match";
+const COMPUTER_PLAN_CONFIDENCE_MIN: f64 = 0.6;
+const COMPUTER_PLAN_AMBIGUITY_MARGIN: f64 = 0.15;
+const COMPUTER_PLAN_MAX_CANDIDATES: usize = 253;
+const COMPUTER_PLAN_MAX_QUERY_CHARS: usize = 4096;
+const COMPUTER_PLAN_MAX_ID_CHARS: usize = 256;
+const COMPUTER_PLAN_MAX_FIELD_CHARS: usize = 4096;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComputerPlanRequest {
+    query: String,
+    candidates: Vec<ComputerPlanCandidate>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ComputerPlanCandidate {
+    id: String,
+    title: String,
+    detail: String,
+}
 
 #[derive(Default)]
 struct Args {
@@ -46,6 +72,7 @@ struct Args {
     log_turn: Option<String>,
     /// Internal: detached daily memory consolidation spawned by `memory::maybe_consolidate`.
     consolidate_memory: Option<String>,
+    computer_plan: bool,
 }
 
 fn main() -> ExitCode {
@@ -60,6 +87,9 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
+    if args.computer_plan {
+        return computer_plan();
+    }
     if args.tts_server {
         return tts::serve();
     }
@@ -115,26 +145,178 @@ fn run() -> Result<(), String> {
         text.clone()
     } else {
         return Err(
-            "use --voice, --text, --transcribe, --say, --tts-server, --doctor, --smoke, --route-test, or --eval"
+            "use --voice, --text, --transcribe, --say, --tts-server, --computer-plan, --doctor, --smoke, --route-test, or --eval"
                 .into(),
         );
     };
     process_turn(transcript, &args)
 }
 
+fn computer_plan() -> Result<(), String> {
+    let mut input = String::new();
+    io::stdin()
+        .take(1_000_001)
+        .read_to_string(&mut input)
+        .map_err(|e| format!("--computer-plan stdin: {e}"))?;
+    if input.len() > 1_000_000 {
+        return Err("--computer-plan input exceeds 1 MB".into());
+    }
+    let request: ComputerPlanRequest =
+        serde_json::from_str(&input).map_err(|e| format!("--computer-plan input: {e}"))?;
+    validate_computer_plan_request(&request)?;
+
+    let state = serde_json::json!({ "query": &request.query });
+    let questions = computer_plan_questions(&request.candidates);
+    let answers = JevClient::from_env()
+        .map_err(|e| format!("--computer-plan Jev: {e}"))?
+        .system_one(&state, &questions)
+        .map_err(|e| format!("--computer-plan Jev: {e}"))?;
+    let id = select_computer_plan_candidate(&answers, &request.candidates)?;
+    let output = serde_json::to_string(&serde_json::json!({ "id": id }))
+        .map_err(|e| format!("--computer-plan output: {e}"))?;
+    io::stdout()
+        .write_all(output.as_bytes())
+        .and_then(|_| io::stdout().flush())
+        .map_err(|e| format!("--computer-plan stdout: {e}"))
+}
+
+fn validate_computer_plan_request(request: &ComputerPlanRequest) -> Result<(), String> {
+    if request.candidates.len() > COMPUTER_PLAN_MAX_CANDIDATES {
+        return Err(format!(
+            "--computer-plan accepts fewer than 254 candidates (got {})",
+            request.candidates.len()
+        ));
+    }
+    validate_computer_plan_text("query", &request.query, COMPUTER_PLAN_MAX_QUERY_CHARS, false)?;
+    let mut ids = HashSet::with_capacity(request.candidates.len());
+    for candidate in &request.candidates {
+        validate_computer_plan_text("candidate id", &candidate.id, COMPUTER_PLAN_MAX_ID_CHARS, false)?;
+        if candidate.id == COMPUTER_PLAN_NO_MATCH {
+            return Err(format!(
+                "candidate id is reserved: {COMPUTER_PLAN_NO_MATCH}"
+            ));
+        }
+        if !ids.insert(&candidate.id) {
+            return Err(format!("duplicate candidate id: {}", candidate.id));
+        }
+        validate_computer_plan_text(
+            "candidate title",
+            &candidate.title,
+            COMPUTER_PLAN_MAX_FIELD_CHARS,
+            true,
+        )?;
+        validate_computer_plan_text(
+            "candidate detail",
+            &candidate.detail,
+            COMPUTER_PLAN_MAX_FIELD_CHARS,
+            true,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_computer_plan_text(
+    field: &str,
+    value: &str,
+    max_chars: usize,
+    allow_empty: bool,
+) -> Result<(), String> {
+    let length = value.chars().count();
+    if (!allow_empty && value.trim().is_empty()) || length > max_chars {
+        return Err(format!(
+            "invalid {field}: expected {}..{max_chars} characters",
+            if allow_empty { 0 } else { 1 }
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("invalid {field}: control characters are not allowed"));
+    }
+    Ok(())
+}
+
+fn computer_plan_questions(candidates: &[ComputerPlanCandidate]) -> serde_json::Value {
+    let mut criteria = serde_json::Map::with_capacity(candidates.len() + 1);
+    for candidate in candidates {
+        criteria.insert(
+            candidate.id.clone(),
+            serde_json::Value::String(format!(
+                "Select {} — {}",
+                candidate.title, candidate.detail
+            )),
+        );
+    }
+    criteria.insert(
+        COMPUTER_PLAN_NO_MATCH.into(),
+        serde_json::Value::String("No candidate is a safe or sufficiently clear match.".into()),
+    );
+    serde_json::json!({
+        "selection": {
+            "type": "choice",
+            "instructions": "Select exactly one supplied candidate only when it best matches the query; choose no_match when the query is ambiguous, unsupported, or no candidate is a safe match.",
+            "criteria": criteria
+        }
+    })
+}
+
+fn select_computer_plan_candidate(
+    answers: &Answers,
+    candidates: &[ComputerPlanCandidate],
+) -> Result<Option<String>, String> {
+    let answer = answers
+        .get("selection")
+        .ok_or_else(|| "Jev response missing selection".to_string())?;
+    let Answer::Choice {
+        choice,
+        probabilities,
+        confidence,
+    } = answer
+    else {
+        return Err("Jev selection answer must be a choice".into());
+    };
+    if !confidence.is_finite() || !(0.0..=1.0).contains(confidence) {
+        return Err("Jev selection confidence is invalid".into());
+    }
+    if choice != COMPUTER_PLAN_NO_MATCH
+        && !candidates.iter().any(|candidate| candidate.id == *choice)
+    {
+        return Err("Jev selected an unknown candidate id".into());
+    }
+    if probabilities.len() != candidates.len() + 1
+        || !probabilities.contains_key(COMPUTER_PLAN_NO_MATCH)
+        || candidates.iter().any(|candidate| !probabilities.contains_key(&candidate.id))
+    {
+        return Err("Jev probabilities do not match supplied candidates".into());
+    }
+    let total: f64 = probabilities.values().sum();
+    if probabilities.values().any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
+        || !total.is_finite()
+        || (total - 1.0).abs() > 0.01
+    {
+        return Err("Jev returned an invalid probability distribution".into());
+    }
+    let selected_probability = probabilities[choice];
+    if probabilities.values().any(|p| *p > selected_probability + 0.000001) {
+        return Err("Jev choice is not the highest probability".into());
+    }
+    let next_probability = probabilities
+        .iter()
+        .filter_map(|(id, probability)| (id != choice).then_some(*probability))
+        .fold(0.0, f64::max);
+    if choice == COMPUTER_PLAN_NO_MATCH
+        || *confidence < COMPUTER_PLAN_CONFIDENCE_MIN
+        || selected_probability < 0.55
+        || selected_probability - next_probability < COMPUTER_PLAN_AMBIGUITY_MARGIN
+    {
+        return Ok(None);
+    }
+    Ok(Some(choice.clone()))
+}
 fn process_turn(raw: String, args: &Args) -> Result<(), String> {
     let configured = profile::load();
     let raw = profile::rewrite_vocabulary(&raw, &configured);
     let detected_wake = audio::wake_matched(&raw);
     let current = audio::strip_wake_word(&raw);
-    let transcript = match args.prefix.as_deref() {
-        Some(prefix) if !prefix.trim().is_empty() => {
-            format!("{} {}", prefix.trim(), current.trim())
-                .trim()
-                .into()
-        }
-        _ => current,
-    };
+    let transcript = combine_followup(&current, args.prefix.as_deref(), detected_wake);
     let wake_matched = detected_wake || args.prefix.is_some() || args.addressed;
     println!("TRANSCRIPT: {transcript}");
     if wake_matched {
@@ -188,17 +370,16 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
         }
     };
     println!("STAGE intent_done_ms={}", audio::elapsed_ms());
-    let computer_use = matches!(decision, policy::Decision::NeedConfirm { pending: policy::PendingAction::ComputerUse { .. }, .. });
+    let unsupported_computer_use = matches!(decision, policy::Decision::UnsupportedComputerUse);
     let mut workflow = if args.emit_text && turn.session.pending_confirmation.is_none() && workflow_may_override(&decision) {
         let all = workflow::load();
-        // A computer-use request may only become a workflow that asks for approval itself.
-        workflow::find(&all, &turn.transcript).filter(|w| w.confirm || !computer_use).cloned()
+        workflow::find(&all, &turn.transcript).filter(|w| w.confirm || w.id == "trinh-duyet" || !unsupported_computer_use).cloned()
     } else {
         None
     };
     let mut prompt = turn.transcript.clone();
     // Acting workflows (browser automation) wait for approval like any other computer use.
-    if let Some(acting) = workflow.take_if(|w| w.confirm) {
+    if let Some(acting) = workflow.take_if(|w| w.confirm || w.id == "trinh-duyet") {
         decision = policy::Decision::NeedConfirm {
             say: format!("Cần phê duyệt: {} theo yêu cầu này. Nói 'xác nhận' hoặc 'huỷ'.", acting.name.to_lowercase()),
             pending: policy::PendingAction::Workflow { id: acting.id, prompt: turn.transcript.clone() },
@@ -254,20 +435,28 @@ fn process_turn(raw: String, args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// A workflow trigger ("nhắc tôi", "hẹn giờ"…) beats a guessed route: plain chat, a clarifying
-/// question, closed commands or app/screen guesses. The computer-use confirmation can only be
-/// replaced by a workflow marked `confirm:`, which asks for approval itself (see process_turn).
-/// Gates (not addressed, incomplete) and explicit memory, session and coding decisions keep priority.
+fn combine_followup(current: &str, prefix: Option<&str>, detected_wake: bool) -> String {
+    match prefix {
+        Some(prefix) if !detected_wake && !prefix.trim().is_empty() => {
+            format!("{} {}", prefix.trim(), current.trim()).trim().into()
+        }
+        _ => current.into(),
+    }
+}
+
+/// A workflow trigger beats a guessed route; acting workflows still require approval.
+/// Unsupported computer use may only become a workflow that asks for approval.
 fn workflow_may_override(decision: &policy::Decision) -> bool {
     use policy::{Decision as D, PendingAction as P};
     matches!(
         decision,
         D::Chat
             | D::Clarify { .. }
+            | D::UnsupportedComputerUse
             | D::Closed { .. }
             | D::OpenApp { .. }
             | D::ReadScreen { .. }
-            | D::NeedConfirm { pending: P::ComputerUse { .. } | P::Closed { .. }, .. }
+            | D::NeedConfirm { pending: P::Closed { .. }, .. }
     )
 }
 
@@ -283,10 +472,10 @@ fn memory_route(decision: &policy::Decision) -> Option<&'static str> {
         D::NeedConfirm { pending, .. } => match pending {
             P::Closed { .. } => "closed_command",
             P::Coding { .. } => "coding_task",
-            P::ComputerUse { .. } | P::Workflow { .. } => "computer_use",
+            P::Workflow { .. } => "computer_use",
             P::ForgetMemory { .. } => "memory",
         },
-        D::Ignore { .. } | D::Incomplete | D::Clarify { .. } | D::Chat | D::ReadScreen { .. } => {
+        D::Ignore { .. } | D::Incomplete | D::Clarify { .. } | D::UnsupportedComputerUse | D::Chat | D::ReadScreen { .. } => {
             return None
         }
     })
@@ -444,15 +633,20 @@ fn legacy_eval(args: &Args) -> Result<(), String> {
 }
 
 fn parse_args() -> Result<Args, String> {
+    parse_args_from(env::args().skip(1))
+}
+
+fn parse_args_from(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args {
         record_seconds: 8,
         speak: true,
         ..Default::default()
     };
-    let mut args = env::args().skip(1);
+    let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--voice" => parsed.voice = true,
+            "--text" => parsed.text = Some(next(&mut args, "--text")?),
             "--audio" => parsed.audio = Some(PathBuf::from(next(&mut args, "--audio")?)),
             "--model" => parsed.model = Some(PathBuf::from(next(&mut args, "--model")?)),
             "--record-seconds" => {
@@ -468,7 +662,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--emit-text" => parsed.emit_text = true,
             "--tts-server" => parsed.tts_server = true,
-            "--text" => parsed.text = Some(next(&mut args, "--text")?),
+            "--computer-plan" => parsed.computer_plan = true,
             "--transcribe" => parsed.transcribe = Some(PathBuf::from(next(&mut args, "--transcribe")?)),
             "--say" => parsed.say = Some(next(&mut args, "--say")?),
             "--doctor" => parsed.doctor = true,
@@ -504,4 +698,79 @@ fn env_path(key: &str, fallback: &str) -> String {
 }
 fn home() -> PathBuf {
     PathBuf::from(env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_wake_starts_a_fresh_turn_after_incomplete_speech() {
+        assert_eq!(combine_followup("ngày mai có mưa không?", Some("mở Safari"), true), "ngày mai có mưa không?");
+        assert_eq!(combine_followup("trên Safari", Some("mở trang"), false), "mở trang trên Safari");
+    }
+
+    fn candidate(id: &str) -> ComputerPlanCandidate {
+        ComputerPlanCandidate {
+            id: id.into(),
+            title: "Safari".into(),
+            detail: "Browser window".into(),
+        }
+    }
+
+    #[test]
+    fn computer_plan_rejects_invalid_or_uncertain_choices() {
+        let candidates = vec![candidate("c0"), candidate("c1")];
+        assert!(validate_computer_plan_request(&ComputerPlanRequest {
+            query: "open browser".into(),
+            candidates: vec![candidate("c0"), candidate("c0")],
+        })
+        .is_err());
+
+        let probabilities = std::collections::HashMap::from([
+            ("c0".into(), 0.82),
+            ("c1".into(), 0.08),
+            (COMPUTER_PLAN_NO_MATCH.into(), 0.10),
+        ]);
+        let mut answers = Answers::new();
+        answers.insert(
+            "selection".into(),
+            Answer::Choice {
+                choice: "c0".into(),
+                probabilities: probabilities.clone(),
+                confidence: 0.59,
+            },
+        );
+        assert_eq!(select_computer_plan_candidate(&answers, &candidates).unwrap(), None);
+
+        answers.insert(
+            "selection".into(),
+            Answer::Choice {
+                choice: "c0".into(),
+                probabilities: probabilities.clone(),
+                confidence: 0.9,
+            },
+        );
+        assert_eq!(select_computer_plan_candidate(&answers, &candidates).unwrap(), Some("c0".into()));
+
+        answers.insert(
+            "selection".into(),
+            Answer::Choice {
+                choice: "c0".into(),
+                probabilities: Default::default(),
+                confidence: 0.9,
+            },
+        );
+        assert!(select_computer_plan_candidate(&answers, &candidates).is_err());
+
+        answers.insert(
+            "selection".into(),
+            Answer::Choice {
+                choice: "not-supplied".into(),
+                probabilities,
+                confidence: 0.99,
+            },
+        );
+        assert!(select_computer_plan_candidate(&answers, &candidates).is_err());
+    }
 }

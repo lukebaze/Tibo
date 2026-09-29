@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ak:diagram medallion spec",
+  "type": "object",
+  "required": [
+    "bronze",
+    "silver",
+    "gold"
+  ],
+  "properties": {
+    "variant": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "full"
+      ],
+      "default": "light"
+    },
+    "title": {
+      "type": "string"
+    },
+    "caption": {
+      "type": "string"
+    },
+    "accent": {
+      "type": "string"
+    },
+    "bronze": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "silver": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "gold": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AK Diagram (editorial + animated)"
+  short_description: "Render editorial-grade PNG/SVG or animated MP4/GIF diagrams from 24 base types (architecture, loop, pyramid, quadrant, radar, timeline, gantt, …). Deterministic byte-hashed output."
+  default_prompt: "Turn the user's structure or story into a polished editorial diagram — pick one of the 24 base types (architecture, high-level, layers, medallion, dp-integration, dp-security-matrix, data-flow, flowchart, sequence, state, swimlane, process, org-chart, loop, pyramid, quadrant, radar, timeline, nested, it-state, bar, line, scatter, gantt), choose a variant (light / dark / full), fill the JSON spec, and render via scripts/render.py. Animate one focal connector when it clarifies flow. Frame it with a title and 8-14-word caption when the diagram benefits from editorial context."

@@ -1,0 +1,86 @@
+upstream:
+  name: archify
+  repository: https://github.com/tt-a1i/archify
+  release_tag: v2.16.0
+  commit: c826e6c3a7abad19c0f3cd1ca57207d54b1ad8de
+  license: MIT
+  license_url: https://raw.githubusercontent.com/tt-a1i/archify/c826e6c3a7abad19c0f3cd1ca57207d54b1ad8de/LICENSE
+  archive_url: https://github.com/tt-a1i/archify/archive/c826e6c3a7abad19c0f3cd1ca57207d54b1ad8de.tar.gz
+  copyright:
+    - "Copyright (c) 2026 tt-a1i (Archify)"
+    - 'Copyright (c) 2025 Cocoon AI (original "architecture-diagram-generator")'
+
+provenance:
+  relationship: design reference only. The typed IR archetypes, presets, and reader interaction
+    vocabulary follow archify; the layout engine, edge router, SVG renderer, motion CSS and
+    reader runtime under scripts/compiler/ and assets/ are AgentKit-authored and share no code
+    with the upstream repository.
+  adapted_archetypes:
+    - architecture
+    - workflow
+    - sequence
+    - dataflow
+    - lifecycle
+  adapted_presets:
+    - classic
+    - signal-flow
+    - blueprint
+    - editorial
+  themes:
+    - light
+    - dark
+  reader_features:
+    - search
+    - node_focus
+    - upstream_downstream_reach
+    - route_inspection
+    - role_lens_comparison
+    - presentation_stage
+    - guided_stories_chapters
+    - share_cards_1200x630
+    - finite_trace_motion
+
+dependency_closure:
+  runtime_packages: 0 (Node.js 18+ ESM built-ins only)
+  build_dependencies: 0
+  browser_required_for_compilation: false
+  network_required_for_rendering: false
+  offline_verified: true
+
+file_manifest:
+  - path: schemas/common.schema.json
+    role: common_typed_ir_schema
+    status: adapted
+    sha256: "494d2c700c7414cec240e9356258a08ebd03259bcd554da1dc21f4d5c6e115dd"
+  - path: schemas/architecture.schema.json
+    role: architecture_archetype_schema
+    status: adapted
+    sha256: "e9f872d45d42ccf21fba792d716a3e50f7af79d86552cf3a69effc893c89dd4b"
+  - path: schemas/workflow.schema.json
+    role: workflow_archetype_schema
+    status: adapted
+    sha256: "effdc5c1cad0eac6b85b7090900cb09fd5b0ca23beb9d0fa51e32d239686300c"
+  - path: schemas/sequence.schema.json
+    role: sequence_archetype_schema
+    status: adapted
+    sha256: "ca5baa4e7c831ac97fdfbb1cc0f7a37c2ad1d1ea6e7e82c4e8d6aaf0bde95476"
+  - path: schemas/dataflow.schema.json
+    role: dataflow_archetype_schema
+    status: adapted
+    sha256: "7652e77b1e462bd36c4a6f42b725d584662584714e6384f64c517a70e93d7d98"
+  - path: schemas/lifecycle.schema.json
+    role: lifecycle_archetype_schema
+    status: adapted
+    sha256: "d83991b0bdbafba61a53080b9eacf3908307a9ae7e3570104c8885f83cee9ff8"
+  - path: scripts/compiler/compile.mjs
+    role: deterministic_offline_compiler
+    status: adapted
+    sha256: "5264e456acf0dfc9214f99bd93136ae129548dfc70120fb548673492e335fe4f"
+  - path: assets/reader.css
+    role: reader_styles_and_presets
+    status: adapted
+    sha256: "42da33eeceeb88bb3d667db3dc2f4cdbb2340d5c783792145e5620014e8d6865"
+  - path: assets/reader.js
+    role: interactive_reader_runtime
+    status: adapted
+    sha256: "3ee307eee8990765d18b5c709ba4a76e3cb69dd79670f5153c34019b07379c76"

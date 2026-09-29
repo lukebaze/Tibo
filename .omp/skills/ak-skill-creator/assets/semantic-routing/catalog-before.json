@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "runtime": {
+    "name": "codex",
+    "version": "fixture",
+    "settings": {
+      "effective_model": "fixture-model"
+    }
+  },
+  "scope": "fixture",
+  "provenance": {
+    "kind": "runtime-visible-export",
+    "source": "protocol fixture",
+    "complete": true
+  },
+  "skills": [
+    {
+      "id": "kit:images",
+      "description": "Draw raster images",
+      "path": "skills/images/SKILL.md"
+    },
+    {
+      "id": "kit:video",
+      "description": "Edit video clips",
+      "path": "skills/video/SKILL.md"
+    }
+  ]
+}

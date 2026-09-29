@@ -1,0 +1,92 @@
+/*
+ * Starter tokens: BRAND register (landing, marketing, portfolio, editorial).
+ * Copy into the project, then set --hue, --accent-*, and the font pair from the brief.
+ * The defaults describe a restrained, editorial direction; change them on purpose.
+ */
+:root {
+  --hue: 35;           /* brand hue: tints neutrals and drives the accent */
+  --accent-hue: 25;    /* may equal --hue, or be a deliberate complement */
+
+  /* Neutrals: low chroma, tinted toward the brand. Not cream by default. */
+  --paper: oklch(98.5% 0.004 var(--hue));
+  --paper-2: oklch(95.5% 0.006 var(--hue));
+  --line: oklch(88% 0.008 var(--hue));
+  --ink: oklch(20% 0.012 var(--hue));
+  --ink-2: oklch(40% 0.012 var(--hue));
+  --ink-3: oklch(55% 0.012 var(--hue));
+
+  /* Accent: one confident color used rarely (Restrained) or widely (Committed). */
+  --accent: oklch(58% 0.17 var(--accent-hue));
+  --accent-ink: oklch(99% 0 0);
+  --accent-deep: oklch(32% 0.09 var(--accent-hue)); /* drenched sections */
+
+  /* Type pair on a contrast axis: serif display + grotesque body. */
+  --font-display: "Newsreader", "Libre Caslon Text", Georgia, serif;
+  --font-body: "Schibsted Grotesk", "Hanken Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Fluid scale, ratio ~1.25 body to 1.333 display. */
+  --step--1: clamp(0.83rem, 0.8rem + 0.15vw, 0.9rem);
+  --step-0: clamp(1rem, 0.96rem + 0.2vw, 1.125rem);
+  --step-1: clamp(1.25rem, 1.15rem + 0.45vw, 1.5rem);
+  --step-2: clamp(1.56rem, 1.38rem + 0.9vw, 2rem);
+  --step-3: clamp(1.95rem, 1.6rem + 1.7vw, 2.75rem);
+  --step-4: clamp(2.44rem, 1.8rem + 3.2vw, 4rem);
+  --step-5: clamp(2.75rem, 1.6rem + 5.6vw, 5.5rem); /* hero only */
+  --tracking-display: -0.025em;
+  --tracking-caps: 0.08em;
+  --leading-display: 1.05;
+  --leading-body: 1.6;
+  --measure: 62ch;
+
+  /* Space: 4pt base; sections breathe. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+  --space-10: 128px;
+  --section-y: clamp(64px, 6vw + 32px, 160px);
+  --gutter: clamp(16px, 4vw, 48px);
+  --container: 1200px;
+
+  /* Shape and depth: pick ONE per page. */
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow-1: 0 1px 2px oklch(25% 0.03 var(--hue) / 0.06),
+    0 4px 12px oklch(25% 0.03 var(--hue) / 0.07);
+  --shadow-2: 0 2px 4px oklch(25% 0.03 var(--hue) / 0.06),
+    0 16px 40px oklch(25% 0.03 var(--hue) / 0.1);
+
+  /* Motion */
+  --dur-press: 120ms;
+  --dur-state: 240ms;
+  --dur-layout: 400ms;
+  --dur-enter: 700ms;
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-press: 0ms; --dur-state: 0ms; --dur-layout: 0ms; --dur-enter: 0ms; }
+}
+
+body {
+  font: 400 var(--step-0) / var(--leading-body) var(--font-body);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: var(--leading-display);
+  letter-spacing: var(--tracking-display);
+  text-wrap: balance;
+}
+p { max-width: var(--measure); text-wrap: pretty; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

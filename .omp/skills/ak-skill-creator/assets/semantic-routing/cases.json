@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "holdout_id": "fixed-v1",
+  "cases": [
+    {
+      "id": "case-00000",
+      "split": "train",
+      "prompt": "Make a watercolor picture of a lake",
+      "expected": "kit:images",
+      "class": "indirect"
+    },
+    {
+      "id": "case-00001",
+      "split": "train",
+      "prompt": "Trim this holiday clip and add subtitles",
+      "expected": "kit:video",
+      "class": "near-miss"
+    },
+    {
+      "id": "case-00002",
+      "split": "holdout",
+      "prompt": "Create a poster of a mountain",
+      "expected": "kit:images",
+      "class": "positive"
+    },
+    {
+      "id": "case-00003",
+      "split": "holdout",
+      "prompt": "Join these clips into a movie",
+      "expected": "kit:video",
+      "class": "near-miss"
+    }
+  ]
+}

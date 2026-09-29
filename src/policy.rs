@@ -87,7 +87,6 @@ pub enum PendingAction {
     Closed { intent: ClosedIntent },
     /// `restart`: replaces the running task (a correction/addition) instead of refusing while busy.
     Coding { agent: Agent, prompt: String, #[serde(default)] restart: bool },
-    ComputerUse { prompt: String },
     /// `line: None` forgets the whole memory.
     ForgetMemory { line: Option<String> },
     /// An acting workflow (e.g. browser automation) waiting for approval; `prompt` is the request.
@@ -107,6 +106,8 @@ pub enum Decision {
     Ignore { reason: &'static str },
     Incomplete,
     Clarify { say: String },
+    /// Unavailable GUI action; only an explicitly approved workflow may replace it.
+    UnsupportedComputerUse,
     Session(SessionAction),
     Closed { intent: ClosedIntent },
     OpenApp { name: String },
@@ -132,17 +133,7 @@ pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decisi
     }
 
     if turn.session.pending_confirmation.is_some() {
-        return match choice(answers, "session_action") {
-            Some(("confirm", confidence)) if confidence >= thresholds.action_conf_min => {
-                Decision::Session(SessionAction::Confirm)
-            }
-            Some(("cancel", confidence)) if confidence >= thresholds.action_conf_min => {
-                Decision::Session(SessionAction::Cancel)
-            }
-            _ => Decision::Clarify {
-                say: "Bạn xác nhận hay huỷ lệnh đang chờ?".into(),
-            },
-        };
+        return pending_reply(&turn.transcript);
     }
 
     let short_control = matches!(
@@ -256,12 +247,7 @@ pub fn decide(turn: &Turn, answers: &Answers, thresholds: &Thresholds) -> Decisi
                     }
                 }
                 Some(("general", confidence)) if confidence >= thresholds.action_conf_min => {
-                    confirmation(
-                        PendingAction::ComputerUse {
-                            prompt: turn.transcript.clone(),
-                        },
-                        "điều khiển máy tính theo yêu cầu này",
-                    )
+                    Decision::UnsupportedComputerUse
                 }
                 _ => unclear(),
             }
@@ -282,22 +268,11 @@ pub fn decide_fallback(turn: &Turn) -> Decision {
         return Decision::Ignore { reason: "no_wake" };
     }
     if turn.session.pending_confirmation.is_some() {
-        // Negation first: "không đồng ý" contains "đồng ý". Approval needs the bare phrase.
-        let words: String = text
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-            .collect::<String>()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if contains_any(&format!(" {words} "), &[" huy ", " cancel ", " khong ", " dung ", " thoi "]) {
-            return Decision::Session(SessionAction::Cancel);
-        }
-        if matches!(words.as_str(), "xac nhan" | "dong y" | "confirm" | "tibo xac nhan" | "tibo dong y") {
-            return Decision::Session(SessionAction::Confirm);
-        }
-        return Decision::Clarify {
-            say: "Bạn xác nhận hay huỷ lệnh đang chờ?".into(),
+        // Without Jev's addressed check, only an explicit wake or typed turn may resolve it.
+        return if turn.wake_matched {
+            pending_reply(&turn.transcript)
+        } else {
+            Decision::Ignore { reason: "no_wake" }
         };
     }
     if let Some(decision) = memory_fallback(&turn.transcript) {
@@ -338,6 +313,25 @@ pub fn decide_fallback(turn: &Turn) -> Decision {
         };
     }
     Decision::Chat
+}
+
+fn pending_reply(transcript: &str) -> Decision {
+    let words: String = normalize(transcript)
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    match words.as_str() {
+        "xac nhan" | "dong y" | "confirm" | "tibo xac nhan" | "tibo dong y" => {
+            Decision::Session(SessionAction::Confirm)
+        }
+        "huy" | "huy lenh" | "huy lenh do" | "cancel" | "khong dong y" | "tibo huy" => {
+            Decision::Session(SessionAction::Cancel)
+        }
+        _ => Decision::Clarify { say: "Bạn xác nhận hay huỷ lệnh đang chờ?".into() },
+    }
 }
 
 /// ponytail: keyword split between OCR (fast, on-device text) and a screenshot for a vision model;
@@ -663,13 +657,10 @@ mod tests {
     fn pending_confirmation_accepts_confirm() {
         let mut value = turn("xác nhận");
         value.wake_matched = false;
-        value.session.pending_confirmation = Some("computer_use: gửi tin nhắn".into());
+        value.session.pending_confirmation = Some("coding_task".into());
         let mut a = answers("session_control");
-        set_choice(&mut a, "session_action", "confirm");
-        assert!(matches!(
-            decide(&value, &a, &Thresholds::default()),
-            Decision::Session(SessionAction::Confirm)
-        ));
+        set_choice(&mut a, "session_action", "cancel");
+        assert_eq!(decide(&value, &a, &Thresholds::default()), Decision::Session(SessionAction::Confirm));
     }
 
     #[test]
@@ -816,33 +807,29 @@ mod tests {
     }
 
     #[test]
-    fn general_computer_use_requires_confirmation() {
+    fn unsupported_computer_use_does_not_request_approval() {
         let mut a = answers("computer_use");
         set_choice(&mut a, "computer_mode", "general");
-        assert!(matches!(
-            decide(
-                &turn("gửi một tin nhắn bằng trình duyệt"),
-                &a,
-                &Thresholds::default()
-            ),
-            Decision::NeedConfirm {
-                pending: PendingAction::ComputerUse { .. },
-                ..
-            }
-        ));
+        assert_eq!(
+            decide(&turn("mở VN Express trên Safari"), &a, &Thresholds::default()),
+            Decision::UnsupportedComputerUse
+        );
     }
 
     #[test]
-    fn pending_computer_request_accepts_cancel() {
-        let mut value = turn("huỷ");
-        value.wake_matched = false;
-        value.session.pending_confirmation = Some("computer_use".into());
+    fn pending_confirmation_only_accepts_explicit_words() {
+        let mut value = turn("đúng");
+        value.session.pending_confirmation = Some("coding_task".into());
         let mut a = answers("session_control");
         set_choice(&mut a, "session_action", "cancel");
-        assert!(matches!(
-            decide(&value, &a, &Thresholds::default()),
-            Decision::Session(SessionAction::Cancel)
-        ));
+        assert!(matches!(decide(&value, &a, &Thresholds::default()), Decision::Clarify { .. }));
+        assert!(matches!(decide_fallback(&value), Decision::Clarify { .. }));
+
+        value.transcript = "huỷ".into();
+        set_choice(&mut a, "session_action", "confirm");
+        assert_eq!(decide(&value, &a, &Thresholds::default()), Decision::Session(SessionAction::Cancel));
+        value.wake_matched = false;
+        assert_eq!(decide_fallback(&value), Decision::Ignore { reason: "no_wake" });
     }
 
     #[test]
@@ -863,7 +850,9 @@ mod tests {
         assert!(matches!(decide_fallback(&turn("chạy đánh giá eva")), Decision::Clarify { .. }));
         let mut pending = turn("không đồng ý");
         pending.wake_matched = false;
-        pending.session.pending_confirmation = Some("computer_use: mở safari".into());
+        pending.session.pending_confirmation = Some("coding_task".into());
+        assert_eq!(decide_fallback(&pending), Decision::Ignore { reason: "no_wake" });
+        pending.wake_matched = true;
         assert_eq!(decide_fallback(&pending), Decision::Session(SessionAction::Cancel));
         pending.transcript = "đồng ý à, để tôi nghĩ".into();
         assert!(matches!(decide_fallback(&pending), Decision::Clarify { .. }));
