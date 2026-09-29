@@ -10,6 +10,8 @@ Tibo **không có agent điều khiển toàn bộ desktop tuỳ ý**. Có ba đ
 | “Tibo, nhắc tôi 8 giờ gọi mẹ”, “xem lịch”, “ghi chú …”, “hẹn giờ 5 phút”, “soạn email …” | Workflow gọi helper macOS và lệnh mạng theo bảng dưới. | Quyền Automation của macOS có thể được hỏi khi thao tác Lời nhắc/Lịch/Ghi chú. Thư chỉ mở **nháp**, người dùng tự gửi. Hẹn giờ bằng tiến trình `sleep`, mất khi máy ngủ/tắt. |
 | “Tibo, dịch đoạn vừa copy …” | Đọc clipboard, xử lý và chép bản dịch/bản sửa trở lại clipboard. | Có thể ghi đè clipboard; phần được đọc giới hạn 12.000 byte trong workflow mặc định. |
 
+Trong lúc Chrome đang chạy, Tibo bỏ qua nhận giọng qua VAD để tiếng nền không huỷ ngang tác vụ; **bấm mic** nếu cần ngắt. Trình duyệt có giới hạn chạy 90 giây và được dừng sau 120 giây nếu runner mắc kẹt. Cấm thao tác nhạy cảm hiện là chỉ dẫn cho browser agent, **không phải sandbox kỹ thuật**: đừng xác nhận tác vụ trên trang có dữ liệu nhạy cảm.
+
 ## Các function đáng chú ý
 
 Helper `workflows/mac.js` chạy qua `osascript -l JavaScript mac.js <command> [args...]`:

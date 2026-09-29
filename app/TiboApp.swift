@@ -1158,10 +1158,11 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                 guard let self, id == self.turnID else { return }
                 self.browserProcess = nil
                 let result = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-                let succeeded = process.terminationStatus == 0 && result?["ok"] as? Bool == true
                 let title = result?["page_title"] as? String ?? ""
                 let url = result?["final_url"] as? String ?? ""
-                let reply = succeeded && !title.isEmpty && !url.isEmpty
+                let succeeded = process.terminationStatus == 0 && result?["ok"] as? Bool == true
+                    && !title.isEmpty && !url.isEmpty
+                let reply = succeeded
                     ? "Đã mở \(title) trên Chrome. Bạn xem lại trang nhé."
                     : "Chưa duyệt web xong: \(result?["error"] as? String ?? result?["status"] as? String ?? "trình duyệt không phản hồi")."
                 self.summary = reply
