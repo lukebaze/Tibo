@@ -64,7 +64,7 @@ lệnh này kiểm tra cả Whisper, VietASR và Kokoro tùy chọn, nên có th
 
 - **Mở app** theo tên (“Tibo, mở Safari”), không tự điều khiển mọi cửa sổ.
 - **Đọc màn hình chính** bằng OCR; câu hỏi về ảnh/biểu đồ có thể gửi kèm ảnh cho agent hỗ trợ thị giác. Cần quyền Ghi màn hình; chỉ hoạt động trong app Tibo.
-- **Duyệt Chrome theo câu lệnh** (“Tibo, tìm kiếm web về trí tuệ nhân tạo”, “truy cập Wikipedia đọc bài này”): sau **một lần Xác nhận**, Tibo chạy thẳng Jev Ultrafast để tự tìm, bấm, gõ và cuộn; không cần Pi diễn giải lại lệnh. Cần cài `~/jev-ultrafast`; không tự đăng nhập, thanh toán, đặt hàng, gửi tin nhắn hoặc xoá.
+- **Duyệt Chrome theo câu lệnh** (“Tibo, tìm kiếm web về trí tuệ nhân tạo”, “truy cập Wikipedia đọc bài này”): sau **một lần Xác nhận**, Tibo chạy thẳng Jev Ultrafast để tự tìm, bấm, gõ và cuộn, rồi mở trang cuối cho bạn xem; không cần Pi diễn giải lại lệnh. Cần cài `~/jev-ultrafast`; không tự đăng nhập, thanh toán, đặt hàng, gửi tin nhắn hoặc xoá.
 - **Tác vụ Mac khác** qua workflow: nhắc việc, lịch, ghi chú, hẹn giờ, nháp email (không gửi), clipboard, thời tiết và bản tin. Helper `workflows/mac.js` có `reminders-add`, `reminders-list`, `calendar-add`, `calendar-list`, `notes-add`, `timer`, `mail-draft`.
 
 **Không có computer-use tuỳ ý**: ngoài app, đọc màn hình và workflow đã cấu hình, yêu cầu GUI chưa hỗ trợ sẽ không được âm thầm chuyển thành thao tác máy. Chi tiết từng function, quyền và giới hạn: [Computer use hiện có](docs/computer-use.md).

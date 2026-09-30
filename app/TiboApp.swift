@@ -1167,9 +1167,16 @@ private final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDe
                     : "Chưa duyệt web xong: \(result?["error"] as? String ?? result?["status"] as? String ?? "trình duyệt không phản hồi")."
                 self.summary = reply
                 if !succeeded { self.fail(reply) }
-                else { self.logMemoryTurn(user: prompt, tibo: reply, route: "workflow:trinh-duyet") }
+                else {
+                    // The runner closes its own background tab, so show the reached page in the user's Chrome.
+                    let show = Process()
+                    show.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                    show.arguments = ["-a", "Google Chrome", url]
+                    try? show.run()
+                    self.logMemoryTurn(user: prompt, tibo: reply, route: "workflow:trinh-duyet")
+                }
                 self.sendTts(text: reply, final: true, turn: id)
-                print("TIBO_BROWSER turn_id=\(id) status=\(succeeded ? "done" : "failed") url=\(url)")
+                print("TIBO_BROWSER turn_id=\(id) status=\(succeeded ? "done" : "failed") url=\(url) error=\(result?["error"] as? String ?? "")")
             }
         }
         summary = "Đang duyệt web…"
