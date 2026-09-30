@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Tibo — trợ lý AI ở ngay notch Mac</title>
+  <desc id="desc">Social preview: chữ Tibo màu trắng, hình Tibo màu cam trên một chiếc Mac, và thông điệp trợ lý AI ở ngay notch Mac.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#10101c"/><stop offset="1" stop-color="#0b0c14"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#ff7b42" stop-opacity=".28"/><stop offset="1" stop-color="#ff7b42" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="orange" x2="1" y2="1">
+      <stop stop-color="#ffb35c"/><stop offset="1" stop-color="#ff6a3d"/>
+    </linearGradient>
+    <linearGradient id="screen" x2="1" y2="1">
+      <stop stop-color="#222334"/><stop offset="1" stop-color="#11121d"/>
+    </linearGradient>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#fff" opacity=".09"/>
+    </pattern>
+    <clipPath id="icon-crop"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+  </defs>
+  <rect width="1280" height="640" fill="url(#background)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <circle cx="1020" cy="313" r="480" fill="url(#glow)"/>
+  <path d="M80 80h1120M80 560h1120" stroke="#fff" stroke-opacity=".11"/>
+  <g font-family="Avenir Next, DejaVu Sans, sans-serif">
+    <rect x="88" y="112" width="10" height="10" rx="5" fill="#ff9950"/>
+    <text x="115" y="124" fill="#ffbf83" font-size="19" font-weight="700" letter-spacing="3">TRỢ LÝ AI CHO MAC</text>
+    <text x="78" y="300" fill="#f7f5f0" font-size="151" font-weight="800" letter-spacing="-9">Tibo<tspan fill="#ff914e">.</tspan></text>
+    <text x="88" y="366" fill="#f7f5f0" font-size="35" font-weight="600">Ở ngay notch Mac.</text>
+    <text x="89" y="472" fill="#bcb9c5" font-size="20">Nói chuyện  ·  Đọc màn hình</text>
+    <text x="89" y="505" fill="#bcb9c5" font-size="20">Làm việc cùng coding agent</text>
+    <text x="89" y="597" fill="#8f8c9d" font-size="17" letter-spacing="1">OPEN SOURCE  /  macOS</text>
+  </g>
+  <!-- Mac display and its notch, kept inside GitHub's 40pt safe area. -->
+  <rect x="731" y="110" width="474" height="437" rx="37" fill="#343343"/>
+  <rect x="735" y="114" width="466" height="429" rx="33" fill="url(#screen)"/>
+  <rect x="745" y="124" width="446" height="409" rx="26" fill="#0b0c14"/>
+  <rect x="747" y="126" width="442" height="405" rx="24" fill="url(#screen)"/>
+  <path d="M879 126h179v20q0 26-26 26h-127q-26 0-26-26z" fill="#080911"/>
+  <circle cx="969" cy="148" r="4" fill="#39394b"/>
+  <path d="M800 211h339M800 462h339" stroke="#fff" stroke-opacity=".08"/>
+  <g transform="translate(846 158) scale(.26)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#orange)"/>
+    <g clip-path="url(#icon-crop)"><path d="M180 100H844V560a170 170 0 0 1-170 170H350a170 170 0 0 1-170-170Z" fill="#0b0c14"/></g>
+    <rect x="282.5" y="271.75" width="159.3" height="256.5" rx="79.65" fill="#fff"/>
+    <rect x="582.2" y="271.75" width="159.3" height="256.5" rx="79.65" fill="#fff"/>
+    <path d="M444.5 584.95Q512 644.35 579.5 584.95" fill="none" stroke="#fff" stroke-width="29.7" stroke-linecap="round"/>
+    <ellipse cx="259.55" cy="584.95" rx="45.9" ry="21.6" fill="#ff9f43"/>
+    <ellipse cx="764.45" cy="584.95" rx="45.9" ry="21.6" fill="#ff9f43"/>
+    <path d="m800 778.6 10.8 30.6 30.6 10.8-30.6 10.8-10.8 30.6-10.8-30.6-30.6-10.8 30.6-10.8Z" fill="#fff"/>
+  </g>
+  <rect x="791" y="477" width="354" height="42" rx="21" fill="#31303c"/>
+  <circle cx="817" cy="498" r="6" fill="#ff9950"/>
+  <text x="839" y="504" fill="#f7f5f0" font-family="Avenir Next, DejaVu Sans, sans-serif" font-size="19">Tibo, hôm nay thế nào?</text>
+</svg>
