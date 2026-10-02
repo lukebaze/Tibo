@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-02T00:00:00Z",
+  "title": "Design System: Tibo Taby Island",
+  "extensions": {
+    "colorMeta": {
+      "island": { "role": "neutral", "displayName": "Island Black", "canonical": "#000000" },
+      "paper": { "role": "neutral", "displayName": "Paper", "canonical": "#F7F5F0" },
+      "secondary": { "role": "neutral", "displayName": "Paper Secondary", "canonical": "rgba(247,245,240,0.62)" },
+      "amber": { "role": "primary", "displayName": "Taby Amber", "canonical": "#FFB35C" },
+      "ember": { "role": "secondary", "displayName": "Working Ember", "canonical": "#FF6A3D" },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#0B0C14" },
+      "surface": { "role": "neutral", "displayName": "Surface", "canonical": "rgba(247,245,240,0.07)" },
+      "raised": { "role": "neutral", "displayName": "Raised", "canonical": "rgba(247,245,240,0.12)" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "rgba(247,245,240,0.14)" },
+      "success": { "role": "tertiary", "displayName": "Success", "canonical": "#30D158" },
+      "danger": { "role": "tertiary", "displayName": "Danger", "canonical": "#FF453A" }
+    },
+    "typographyMeta": {
+      "voice": { "displayName": "Voice", "purpose": "Status line and island questions." },
+      "approval": { "displayName": "Approval Well", "purpose": "Pending action, command, path, and preview." }
+    },
+    "motion": [
+      { "name": "expand", "value": "spring(response: 0.38, dampingFraction: 0.8)", "purpose": "Expand/collapse island." },
+      { "name": "height", "value": "spring(response: 0.3, dampingFraction: 0.85)", "purpose": "Conversation and approval height changes." },
+      { "name": "state", "value": "easeOut(0.15s)", "purpose": "Drop and approval state transitions (120–150 ms)." },
+      { "name": "allow-arm", "value": "0.5s", "purpose": "Delay before Allow can arm." },
+      { "name": "reduce-motion", "value": "nil animation", "purpose": "Remove motion and press scale; EmberHorizon remains static." }
+    ],
+    "breakpoints": [
+      { "name": "expanded-width", "value": "640px" },
+      { "name": "empty-height", "value": "92px" },
+      { "name": "conversation-height", "value": "200px" }
+    ]
+  },
+  "components": [
+    { "name": "Send", "kind": "button", "refersTo": "send", "description": "Amber 28px circular action with ink symbol; disabled state uses surface and secondary." },
+    { "name": "Allow", "kind": "button", "refersTo": "allow", "description": "Amber approval action with ink label; remember scope comes from runtime." },
+    { "name": "Composer", "kind": "input", "refersTo": "composer", "description": "16px surface well with attachment, screen-read, mic, and explicit send controls." },
+    { "name": "Approval Well", "kind": "card", "refersTo": "approval-well", "description": "12px monospace action preview replacing the composer." },
+    { "name": "Working Light", "kind": "custom", "description": "EmberHorizon lower-edge sweep: 10px blur at 0.7 opacity plus 1.5px crisp stroke." }
+  ],
+  "narrative": {
+    "northStar": "Taby Island",
+    "overview": "Tibo is a small black island cut into the menu bar. It grows sideways into a short work surface for asking, attaching, watching an agent act, and approving one consequential action. Warm paper, scarce amber, and tonal wells keep it focused.",
+    "keyCharacteristics": ["Hardware-matched black island", "Amber is actionable and scarce", "Compact Vietnamese-first, keyboard-first surface"],
+    "rules": [
+      { "name": "The One Action Rule", "body": "Amber marks send, allow, focus, drop, and attachment presence—not decoration, status copy, or history.", "section": "colors" },
+      { "name": "The Ember Rule", "body": "Ember belongs only to the working light and app-icon/onboarding bezel; it is never a state color.", "section": "colors" },
+      { "name": "The Black Island Rule", "body": "The island stays hardware black; do not replace it with material or adaptive glass.", "section": "elevation" }
+    ],
+    "dos": ["Do keep tokens in TiboStyle.", "Do use human wording before monospace machine detail.", "Do honor Reduce Motion."],
+    "donts": ["Don't auto-send dropped files.", "Don't color status text or history amber.", "Don't use ember as a status color."]
+  }
+}

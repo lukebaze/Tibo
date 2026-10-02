@@ -3,3 +3,4 @@ build/
 Tibo.app/
 *.wav
 dist/
+__pycache__/

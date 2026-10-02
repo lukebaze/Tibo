@@ -1,4 +1,4 @@
-use crate::{policy::normalize, profile};
+use crate::profile;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -14,39 +14,6 @@ pub fn elapsed_ms() -> u128 {
     STARTED.elapsed().as_millis()
 }
 
-pub fn capture(seconds: u64, device: Option<&str>) -> Result<PathBuf, String> {
-    let wav = temp_wav("input");
-    let ffmpeg = env::var("TIBO_FFMPEG").unwrap_or_else(|_| "/opt/homebrew/bin/ffmpeg".into());
-    let device = device
-        .map(str::to_owned)
-        .or_else(|| env::var("TIBO_AUDIO_DEVICE").ok())
-        .unwrap_or_else(|| "0".into());
-    let status = Command::new(ffmpeg)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "avfoundation",
-            "-i",
-            &format!(":{device}"),
-            "-t",
-            &seconds.to_string(),
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            "-y",
-        ])
-        .arg(&wav)
-        .status()
-        .map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(wav)
-    } else {
-        Err(format!("ffmpeg exited with {status}"))
-    }
-}
 
 pub fn transcribe(
     wav: &Path,
@@ -138,7 +105,7 @@ fn transcribe_whisper(
         .collect::<Vec<_>>()
         .join(", ");
     let default_prompt = format!(
-        "{assistant} ơi, liệt kê các agent OMP. {assistant}, nhờ Claude Code review thay đổi. Chạy Codex, chạy benchmark, đánh giá Eva. Dừng lại, tiếp tục, xác nhận, huỷ.{vocabulary_suffix}",
+        "{assistant} ơi, hãy nghe rõ câu nói.{vocabulary_suffix}",
         vocabulary_suffix = if vocabulary.is_empty() {
             String::new()
         } else {
@@ -199,11 +166,11 @@ fn transcribe_whisper_server(url: &str, wav: &Path, language: &str, prompt: &str
     );
     body.extend_from_slice(&audio);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let http: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .build()
         .into();
-    let text = agent
+    let text = http
         .post(url)
         .header("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
         .send(&body[..])
@@ -214,70 +181,6 @@ fn transcribe_whisper_server(url: &str, wav: &Path, language: &str, prompt: &str
     Ok(text.trim().to_string())
 }
 
-/// Matches configured wake phrases after normalization.
-fn wake_len(words: &[&str], phrases: &[String]) -> usize {
-    fn bare(word: &str) -> &str {
-        word.trim_matches(|c: char| !c.is_alphanumeric())
-    }
-    let words = words
-        .iter()
-        .map(|word| bare(word))
-        .collect::<Vec<_>>();
-    phrases
-        .iter()
-        .filter_map(|phrase| {
-            let normalized_phrase = normalize(phrase);
-            let phrase_words = normalized_phrase
-                .split_whitespace()
-                .map(bare)
-                .filter(|word| !word.is_empty())
-                .collect::<Vec<_>>();
-            if phrase_words.is_empty() || phrase_words.len() > words.len() {
-                return None;
-            }
-            let matches = phrase_words.iter().zip(&words).all(|(expected, actual)| {
-                if phrase_words.len() == 1 {
-                    actual.starts_with(expected)
-                } else {
-                    actual == expected
-                }
-            });
-            matches.then_some(phrase_words.len())
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn wake_phrases(configured: &profile::Profile) -> Vec<String> {
-    std::iter::once(configured.assistant_name.clone())
-        .chain(configured.wake_words.iter().cloned())
-        .collect()
-}
-
-fn wake_matched_with_phrases(transcript: &str, phrases: &[String]) -> bool {
-    let text = normalize(transcript);
-    let words: Vec<&str> = text.split_whitespace().collect();
-    (0..words.len()).any(|start| wake_len(&words[start..], phrases) > 0)
-}
-
-fn strip_wake_word_with_phrases(transcript: &str, phrases: &[String]) -> String {
-    let normalized = normalize(transcript);
-    let words = normalized.split_whitespace().collect::<Vec<_>>();
-    let count = wake_len(&words, phrases);
-    transcript
-        .split_whitespace()
-        .skip(count)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-pub fn wake_matched(transcript: &str) -> bool {
-    wake_matched_with_phrases(transcript, &wake_phrases(&profile::load()))
-}
-
-pub fn strip_wake_word(transcript: &str) -> String {
-    strip_wake_word_with_phrases(transcript, &wake_phrases(&profile::load()))
-}
 
 fn home() -> PathBuf {
     PathBuf::from(env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
@@ -301,41 +204,3 @@ pub fn validate_wav(path: &Path) -> Result<(), String> {
 }
 
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn whisper_spellings_of_tibo_wake_and_strip() {
-        // Observed Whisper large-v3-turbo outputs for spoken "Tibo".
-        let phrases = vec!["Tibo".into(), "Ti bo".into()];
-        for (raw, rest) in [
-            ("Ti bo ơi, liệt kê các agent đang chạy.", "ơi, liệt kê các agent đang chạy."),
-            ("Tibo, chạy benchmark tiếng Việt.", "chạy benchmark tiếng Việt."),
-            ("Tibor nhớ Cloud review thay đổi.", "nhớ Cloud review thay đổi."),
-            ("Tì bò ơi", "ơi"),
-        ] {
-            assert!(wake_matched_with_phrases(raw, &phrases), "{raw}");
-            assert_eq!(strip_wake_word_with_phrases(raw, &phrases), rest);
-        }
-        assert!(wake_matched_with_phrases("Này Ti Bo, dừng lại!", &phrases));
-        assert_eq!(
-            strip_wake_word_with_phrases("Này Ti Bo, dừng lại!", &phrases),
-            "Này Ti Bo, dừng lại!"
-        );
-        assert!(!wake_matched_with_phrases("Dừng lại, tiếp tục.", &phrases));
-        assert_eq!(
-            strip_wake_word_with_phrases("Dừng lại.", &phrases),
-            "Dừng lại."
-        );
-    }
-    #[test]
-    fn custom_name_and_multiword_wake_variant_match() {
-        let phrases = vec!["Mi".into(), "mi mi".into()];
-        assert!(wake_matched_with_phrases("Mi mi, mở Safari", &phrases));
-        assert_eq!(
-            strip_wake_word_with_phrases("Mi mi, mở Safari", &phrases),
-            "mở Safari"
-        );
-    }
-}

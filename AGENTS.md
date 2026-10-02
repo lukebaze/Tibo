@@ -365,3 +365,7 @@ installed worktree/isolation capability when the repository workflow requires
 one. Use an installed scouting capability or native file search to discover
 relevant patterns.
 <!-- AGENTKIT-OMP:END:engineer -->
+
+## Tibo UI
+
+Read `DESIGN.md` before changing notch UI and keep colors, type and sizes in `TiboStyle`. Verify with `REVIEW.md`: window-only screenshots of every changed state, keyboard, VoiceOver labels and Reduce Motion.

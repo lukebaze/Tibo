@@ -1,15 +1,18 @@
 #!/bin/sh
 set -eu
 
-# tibo-bench is a dev tool (reads bench/ from the checkout); it is not shipped in the app.
-cargo build --release --bin tibo --bin tibo-web
+cargo build --release --bin tibo
 mkdir -p build
-swiftc -O -parse-as-library -framework SwiftUI -framework AppKit -framework AVFoundation -framework Speech -framework SoundAnalysis -framework Carbon app/*.swift -Xlinker -dead_strip -o build/TiboApp
+swiftc -O -parse-as-library -framework SwiftUI -framework AppKit -framework AVFoundation -framework Speech -framework SoundAnalysis -framework Carbon -framework Security app/*.swift -Xlinker -dead_strip -o build/TiboApp
 strip -x build/TiboApp
 rm -rf Tibo.app
 mkdir -p Tibo.app/Contents/MacOS Tibo.app/Contents/Resources
 cp build/TiboApp Tibo.app/Contents/MacOS/
 cp target/release/tibo app/Tibo.icns Tibo.app/Contents/Resources/
+# The agent runtime uses only Python's standard library; voice bridges stay optional.
+cp scripts/tibo_agent.py scripts/tibo_agent_tools.py Tibo.app/Contents/Resources/
+mkdir -p Tibo.app/Contents/Resources/workflows
+cp workflows/*.md workflows/mac.js Tibo.app/Contents/Resources/workflows/
 # Ship only the face clips the app names in code; the full Taby pack stays in app/taby for future moods.
 mkdir -p Tibo.app/Contents/Resources/taby
 cp app/taby/LICENSE Tibo.app/Contents/Resources/taby/
@@ -24,5 +27,7 @@ codesign --force --deep --sign "${SIGN_ID:--}" Tibo.app
 mkdir -p dist && hdiutil create -volname Tibo -srcfolder Tibo.app -ov -format UDZO dist/Tibo.dmg
 rm -rf "$HOME/Applications/Tibo.app"
 cp -R Tibo.app "$HOME/Applications/"
-cp target/release/tibo-web "$HOME/.local/bin/tibo-web"
 cp target/release/tibo "$HOME/.local/bin/tibo"
+mkdir -p "$HOME/.local/share/tibo/runtime/workflows"
+cp scripts/tibo_agent.py scripts/tibo_agent_tools.py "$HOME/.local/share/tibo/runtime/"
+cp workflows/*.md workflows/mac.js "$HOME/.local/share/tibo/runtime/workflows/"

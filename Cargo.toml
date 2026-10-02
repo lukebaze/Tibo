@@ -12,14 +12,6 @@ ureq = { version = "3", features = ["json"] }
 name = "tibo"
 path = "src/bin/tibo.rs"
 
-[[bin]]
-name = "tibo-bench"
-path = "src/bin/tibo-bench.rs"
-
-[[bin]]
-name = "tibo-web"
-path = "src/bin/tibo-web.rs"
-
 [profile.release]
 lto = true
 codegen-units = 1

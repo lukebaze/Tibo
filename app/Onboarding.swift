@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import AVFoundation
+import Carbon
 import Speech
 import SwiftUI
 
@@ -46,7 +47,7 @@ enum TiboWindows {
 
     private static func makeWindow<Content: View>(title: String, root: Content) -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -57,6 +58,12 @@ enum TiboWindows {
         window.center()
         return window
     }
+}
+
+private extension View {
+    /// The setup windows' primary action: ink on Taby amber, since white on amber is 1.9:1. Only primary
+    /// actions and onboarding progress take amber; other controls stay system-native.
+    func tiboProminent() -> some View { buttonStyle(.borderedProminent).tint(TiboStyle.accent).foregroundStyle(TiboStyle.onAccent) }
 }
 
 private struct VoicePack: Identifiable {
@@ -71,19 +78,20 @@ private struct VoicePackInfo: Decodable {
     let filename: String
 }
 
-private enum OnboardingPage: Int, CaseIterable, Identifiable {
-    case welcome, profile, assistant, agent, tts, stt, listen, permissions, tryIt, finish
-    var id: Int { rawValue }
+private enum OnboardingPage {
+    case welcome, persona, agent, customize, voice, tts, stt, notch, tools, permissions, tryIt, finish
     var title: String {
         switch self {
         case .welcome: "Chào mừng"
-        case .profile: "Hồ sơ"
-        case .assistant: "Tên gọi"
-        case .agent: "Bộ não AI"
-        case .tts: "Giọng nói"
+        case .persona: "Hồ sơ & tính cách"
+        case .agent: "Model"
+        case .customize: "Tùy chỉnh (không bắt buộc)"
+        case .voice: "Giọng nói & từ gọi"
+        case .tts: "Giọng đọc"
         case .stt: "Nhận dạng giọng nói"
-        case .listen: "Nghe, nói và notch"
-        case .permissions: "Quyền truy cập"
+        case .notch: "Notch & phím tắt"
+        case .tools: "Quyền của agent"
+        case .permissions: "Quyền hệ thống"
         case .tryIt: "Thử ngay"
         case .finish: "Hoàn tất"
         }
@@ -91,15 +99,54 @@ private enum OnboardingPage: Int, CaseIterable, Identifiable {
     /// Settings sidebar icon.
     var symbol: String {
         switch self {
-        case .profile: "person.crop.circle"
-        case .assistant: "character.bubble"
+        case .persona: "person.crop.circle"
         case .agent: "brain"
+        case .notch: "menubar.rectangle"
+        case .tools: "lock.shield"
+        case .voice: "mic"
         case .tts: "speaker.wave.2"
-        case .stt: "mic"
-        case .listen: "ear"
+        case .stt: "waveform"
+        case .permissions: "checkmark.shield"
         default: "circle"
         }
     }
+    static let settings: [OnboardingPage] = [.persona, .agent, .notch, .tools, .voice, .tts, .stt, .permissions]
+}
+
+/// HTTPS, or HTTP only on loopback; no credentials in the URL. Mirrors `validate_base_url` in the runtime.
+private func agentEndpoint(_ value: String) -> URL? {
+    guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+          let scheme = url.scheme?.lowercased(),
+          scheme == "https" || (scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(url.host ?? "")),
+          url.host != nil, url.user == nil, url.password == nil else { return nil }
+    return url
+}
+
+/// Trims what the user typed and drops empty rows; returns the first problem that blocks saving.
+/// Shared by onboarding and Settings so both persist the same shape.
+private func validate(_ draft: inout Profile) -> String? {
+    func trim(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
+    draft.userName = trim(draft.userName)
+    draft.assistantName = trim(draft.assistantName).isEmpty ? "Tibo" : trim(draft.assistantName)
+    draft.pronounSelf = trim(draft.pronounSelf).isEmpty ? "mình" : trim(draft.pronounSelf)
+    draft.pronounUser = trim(draft.pronounUser).isEmpty ? "bạn" : trim(draft.pronounUser)
+    draft.wakeWords = draft.wakeWords.filter { !trim($0).isEmpty }
+    draft.customInstructions = trim(draft.customInstructions)
+    draft.quickPrompts = draft.quickPrompts.compactMap { item in
+        let prompt = trim(item.prompt)
+        guard !prompt.isEmpty else { return nil }
+        return Profile.QuickPrompt(id: item.id, title: trim(item.title).isEmpty ? String(prompt.prefix(20)) : trim(item.title), prompt: prompt)
+    }
+    guard agentEndpoint(draft.agentBaseURL) != nil else { return "Nhập endpoint API hợp lệ, ví dụ https://api.openai.com/v1." }
+    guard !trim(draft.agentModel).isEmpty else { return "Nhập tên model trước khi tiếp tục." }
+    let env = trim(draft.agentAPIKeyEnv)
+    guard env.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil else {
+        return "Tên biến môi trường API key chỉ dùng chữ ASCII, số và dấu gạch dưới; không bắt đầu bằng số."
+    }
+    draft.agentBaseURL = trim(draft.agentBaseURL)
+    draft.agentModel = trim(draft.agentModel)
+    draft.agentAPIKeyEnv = env
+    return nil
 }
 
 private struct OnboardingView: View {
@@ -113,6 +160,12 @@ private struct OnboardingView: View {
     @State private var woke = false
     private let startNotch: () -> Void
     private let onFinish: () -> Void
+    /// Required steps stay short; everything optional lives on `.customize`, voice steps only with the mic on.
+    private var pages: [OnboardingPage] {
+        [.welcome, .persona, .agent, .customize] + (draft.microphoneEnabled ? [.voice, .tts, .stt] : []) + [.permissions, .tryIt, .finish]
+    }
+
+    private var pageIndex: Int { pages.firstIndex(of: page) ?? 0 }
 
     init(store: ProfileStore, startNotch: @escaping () -> Void, onFinish: @escaping () -> Void) {
         _store = ObservedObject(wrappedValue: store)
@@ -126,13 +179,13 @@ private struct OnboardingView: View {
             HStack {
                 Text(page.title).font(.system(size: 24, weight: .semibold, design: .rounded))
                 Spacer()
-                Text("\(page.rawValue + 1) / \(OnboardingPage.allCases.count)")
+                Text("\(pageIndex + 1) / \(pages.count)")
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Trang \(page.rawValue + 1) trên \(OnboardingPage.allCases.count)")
+                    .accessibilityLabel("Trang \(pageIndex + 1) trên \(pages.count)")
             }
             .padding(.horizontal, 28)
             .padding(.top, 22)
-            ProgressView(value: Double(page.rawValue), total: Double(OnboardingPage.allCases.count - 1))
+            ProgressView(value: Double(pageIndex), total: Double(max(1, pages.count - 1))).tint(TiboStyle.accent)
                 .padding(.horizontal, 28)
                 .padding(.top, 12)
 
@@ -141,6 +194,7 @@ private struct OnboardingView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(28)
             }
+            .id(page) // each step starts at the top, not at the previous step's scroll offset
 
             if !errorMessage.isEmpty {
                 Text(errorMessage).foregroundStyle(.red).font(.callout)
@@ -149,44 +203,44 @@ private struct OnboardingView: View {
                     .accessibilityFocused($errorFocused)
             }
             HStack {
-                Button("Quay lại") { page = OnboardingPage(rawValue: page.rawValue - 1) ?? .welcome }
-                    .disabled(page == .welcome)
+                Button("Quay lại") {
+                    guard let index = pages.firstIndex(of: page), index > 0 else { return }
+                    page = pages[index - 1]
+                }
+                    .disabled(pageIndex == 0)
                 Spacer()
                 if page == .finish {
                     Button("Bắt đầu") { finish() }
-                        .buttonStyle(.borderedProminent)
+                        .tiboProminent()
                 } else {
                     // Model downloads keep running while the user moves on; the button shows how far along they are.
                     Button(downloader.active == nil ? "Tiếp" : "Tiếp · đang tải \(Int(downloader.progress * 100))%") { next() }
-                        .buttonStyle(.borderedProminent)
+                        .tiboProminent()
                 }
             }
             .padding(20)
         }
-        .frame(minWidth: 640, minHeight: 520)
-    
+        .frame(minWidth: 640, minHeight: 560)
     }
 
     @ViewBuilder private var pageView: some View {
         switch page {
         case .welcome:
             VStack(spacing: 16) {
-                BuddyFace(mood: .happy, level: 0.7).frame(width: 260, height: 150)
-                    .background(.black).clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                // Taby on the ink screen inside the app icon's amber bezel.
+                BuddyFace(mood: .happy, hearing: false).frame(width: 240, height: 138)
+                    .background(TiboStyle.onAccent).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .padding(10)
+                    .background(LinearGradient(colors: [TiboStyle.accent, TiboStyle.ember], startPoint: .topLeading, endPoint: .bottomTrailing),
+                                in: RoundedRectangle(cornerRadius: 34, style: .continuous))
                     .accessibilityElement().accessibilityLabel("Tibo vui vẻ")
-                Text("Xin chào! Mình là Tibo.").font(.title2.bold())
-                Text("Mình sẽ lắng nghe, giúp bạn làm việc và nói chuyện bằng tiếng Việt. Hãy dành một phút để cá nhân hóa Tibo.")
-                    .multilineTextAlignment(.center).foregroundStyle(.secondary)
+                Text("Chào bạn, mình là Tibo.").font(.system(size: 22, weight: .bold, design: .rounded))
+                Text("Chỉ cần ba thứ: tên của bạn, model và thử notch. Các trang còn lại bấm Tiếp để đi qua; xưng hô, cách trả lời, phím tắt và quyền của agent chỉnh lại lúc nào cũng được trong Cài đặt.")
+                    .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 460)
             }.frame(maxWidth: .infinity)
-        case .profile: ProfilePageView(draft: $draft)
-        case .assistant: AssistantPageView(draft: $draft, store: store)
-        case .agent: AgentPageView(draft: $draft)
-        case .tts: TtsPageView(draft: $draft)
-        case .stt: SttPageView(draft: $draft)
-        case .listen: ListenPageView(draft: $draft)
-        case .permissions: PermissionsPageView(store: store)
         case .tryIt: TryItPageView(draft: draft, hovered: $hovered, woke: $woke)
         case .finish: finishView
+        default: SetupPageView(page: page, draft: $draft, store: store, onboarding: true)
         }
     }
 
@@ -194,45 +248,58 @@ private struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(draft.assistantName) đã sẵn sàng.").font(.title3.weight(.semibold))
             Divider().padding(.vertical, 6)
-            summaryRow("Gọi bằng", ([draft.assistantName] + draft.wakeWords).joined(separator: ", "))
-            summaryRow("Bộ não AI", draft.agent == .pi && !draft.agentModel.isEmpty ? "pi · \(draft.agentModel)" : draft.agent.title)
-            summaryRow("Giọng nói", TtsPageView.voiceLabel(draft))
-            summaryRow("Nhận dạng", SttPageView.summary(draft) + (downloader.active == nil ? "" : " (đang tải \(Int(downloader.progress * 100))%)"))
-            summaryRow("Cách nghe", draft.voiceMode.title)
+            summaryRow("Xưng hô", "\(draft.pronounSelf) – \(draft.pronounUser)")
+            summaryRow("Trả lời", "\(draft.replyLength.title) · \(draft.tone.title)")
+            summaryRow("Model", draft.agentModel.isEmpty ? "Chưa cấu hình" : "\(draft.agentModel) · \(URL(string: draft.agentBaseURL)?.host ?? draft.agentBaseURL)")
+            summaryRow("Phím tắt", draft.hotkey.label)
+            summaryRow("Thư mục làm việc", ToolSections.workspaceLabel(draft))
+            summaryRow("Công cụ tắt", ToolSections.disabledSummary(draft))
+            if draft.microphoneEnabled {
+                summaryRow("Gọi bằng", ([draft.assistantName] + draft.wakeWords).joined(separator: ", "))
+                summaryRow("Giọng nói", TtsPageView.voiceLabel(draft))
+                summaryRow("Nhận dạng", SttPageView.summary(draft) + (downloader.active == nil ? "" : " (đang tải \(Int(downloader.progress * 100))%)"))
+                summaryRow("Cách nghe", draft.voiceMode.title)
+            } else {
+                summaryRow("Micro", "Tắt · chế độ văn bản")
+            }
             Text("Mọi lựa chọn đều đổi được trong Cài đặt.").font(.caption).foregroundStyle(.secondary).padding(.top, 6)
         }
     }
 
-    private func summaryRow(_ label: String, _ value: String) -> some View { HStack { Text(label).foregroundStyle(.secondary); Spacer(); Text(value) } }
+    private func summaryRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) { Text(label).foregroundStyle(.secondary); Spacer(); Text(value).multilineTextAlignment(.trailing) }
+    }
 
     private func next() {
         errorMessage = ""
         errorFocused = false
-        if page == .profile && draft.userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if page == .persona && draft.userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showError("Nhập tên của bạn để tiếp tục.")
             return
         }
-        if page == .assistant {
-            draft.assistantName = draft.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
-            draft.wakeWords = draft.wakeWords.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-            if draft.assistantName.isEmpty {
-                showError("Nhập tên trợ lý để tiếp tục.")
-                return
-            }
+        if page == .agent, let problem = validate(&draft) {
+            showError(problem)
+            return
         }
-        if page == .stt && draft.sttEngine == .whisper && downloader.active == nil
+        if page == .stt && draft.microphoneEnabled && draft.sttEngine == .whisper && downloader.active == nil
             && !FileManager.default.fileExists(atPath: ProfileStore.modelsDir.appendingPathComponent(draft.whisperModel).path) {
             showError("Tải một mô hình Whisper, hoặc chọn Apple Speech để dùng ngay.")
             return
         }
         if page == .tryIt && !hovered {
-            showError("Đưa chuột lên notch ở đỉnh màn hình để tiếp tục.")
+            showError("Bấm vào notch ở đỉnh màn hình (hoặc nhấn \(draft.hotkey.label)) để tiếp tục.")
             return
         }
-        page = OnboardingPage(rawValue: page.rawValue + 1) ?? .finish
+        guard let index = pages.firstIndex(of: page), index + 1 < pages.count else { return }
+        page = pages[index + 1]
         if page == .tryIt {
             // The live notch reads the stored profile, so persist the choices (still not onboarded) before starting it.
+            _ = validate(&draft)
             store.save(draft)
+            guard store.persistenceError.isEmpty else {
+                showError("Không thể lưu profile: \(store.persistenceError)")
+                return
+            }
             startNotch()
         }
     }
@@ -244,103 +311,453 @@ private struct OnboardingView: View {
     }
 
     private func finish() {
+        if let problem = validate(&draft) {
+            showError(problem)
+            return
+        }
         draft.onboarded = true
-        draft.assistantName = draft.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.wakeWords = draft.wakeWords.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         store.save(draft)
+        guard store.persistenceError.isEmpty else {
+            draft.onboarded = false
+            showError("Không thể lưu profile: \(store.persistenceError)")
+            return
+        }
         onFinish()
     }
 }
 
 // MARK: - Pages shared by onboarding and Settings
 
-private struct ProfilePageView: View {
-    @Binding var draft: Profile
-    var body: some View {
-        Form {
-            Section("Tên của bạn") {
-                TextField("Tên", text: $draft.userName, prompt: Text("Ví dụ: Huy"))
-                    .accessibilityLabel("Tên của bạn")
-            }
-        }.formStyle(.grouped)
-    }
-}
-
-/// Name, extra wake words and voice training on one page: training learns how the user says the name.
-private struct AssistantPageView: View {
+/// One setup page. Onboarding splits the essentials from the optional customize step; Settings shows one topic per page.
+private struct SetupPageView: View {
+    let page: OnboardingPage
     @Binding var draft: Profile
     let store: ProfileStore
+    let onboarding: Bool
+
     var body: some View {
-        Form {
-            Section("Tên trợ lý") {
-                TextField("Tên", text: $draft.assistantName, prompt: Text("Tibo"))
-                Text("Nói “\(draft.assistantName.isEmpty ? "Tibo" : draft.assistantName) ơi …” để gọi")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            Section("Từ gọi thêm") {
-                ForEach(Array(draft.wakeWords.enumerated()), id: \.offset) { index, word in
-                    HStack {
-                        TextField("Từ gọi", text: Binding(get: { draft.wakeWords[index] }, set: { draft.wakeWords[index] = $0 }), prompt: Text("Ví dụ: Ti bô"))
-                            .labelsHidden()
-                        Button { draft.wakeWords.remove(at: index) } label: {
-                            Image(systemName: "minus.circle")
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Xóa từ gọi \(word)")
-                    }
+        switch page {
+        case .persona:
+            Form {
+                IdentitySections(draft: $draft)
+                if onboarding { MicSection(draft: $draft) } else { StyleSections(draft: $draft) }
+            }.formStyle(.grouped)
+        case .agent: AgentPageView(draft: $draft, store: store)
+        case .customize:
+            Form {
+                Section {
+                    Text("Mặc định đã dùng tốt. Chỉnh những gì bạn muốn, hoặc bấm Tiếp để bỏ qua; mọi thứ ở đây đều có trong Cài đặt.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-                Button("Thêm từ gọi") { draft.wakeWords.append("") }
-            }
-            TrainingSections(draft: $draft, store: store)
-        }.formStyle(.grouped)
+                StyleSections(draft: $draft)
+                NotchSections(draft: $draft)
+                ToolSections(draft: $draft)
+            }.formStyle(.grouped)
+        case .notch: Form { NotchSections(draft: $draft) }.formStyle(.grouped)
+        case .tools: Form { ToolSections(draft: $draft) }.formStyle(.grouped)
+        case .voice:
+            Form {
+                if !onboarding { MicSection(draft: $draft) }
+                if draft.microphoneEnabled { VoiceSections(draft: $draft, store: store) }
+            }.formStyle(.grouped)
+        case .tts: TtsPageView(draft: $draft)
+        case .stt: SttPageView(draft: $draft)
+        case .permissions: PermissionsPageView(store: store, microphone: draft.microphoneEnabled)
+        default: EmptyView()
+        }
     }
 }
 
-private struct AgentPageView: View {
+/// Names and how the assistant and the user address each other in Vietnamese.
+private struct IdentitySections: View {
+    @Binding var draft: Profile
+    private static let addresses = [["mình", "bạn"], ["tôi", "bạn"], ["em", "anh"], ["em", "chị"], ["tớ", "cậu"]]
+
+    var body: some View {
+        Section("Bạn") {
+            TextField("Tên của bạn", text: $draft.userName, prompt: Text("Ví dụ: Huy"))
+        }
+        Section {
+            TextField("Tên trợ lý", text: $draft.assistantName, prompt: Text("Tibo"))
+            HStack {
+                TextField("Xưng hô", text: $draft.pronounSelf, prompt: Text("mình"))
+                Text("–").foregroundStyle(.secondary)
+                TextField("Gọi bạn là", text: $draft.pronounUser, prompt: Text("bạn")).labelsHidden()
+                Menu("Mẫu") {
+                    ForEach(Self.addresses, id: \.self) { pair in
+                        Button(pair.joined(separator: " – ")) { draft.pronounSelf = pair[0]; draft.pronounUser = pair[1] }
+                    }
+                }
+                .fixedSize()
+                .accessibilityLabel("Chọn cách xưng hô có sẵn")
+            }
+        } header: {
+            Text("Trợ lý")
+        } footer: {
+            Text("Ví dụ: “\(draft.pronounSelf.capitalized) đã thêm lịch họp cho \(draft.pronounUser) rồi.”")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct MicSection: View {
     @Binding var draft: Profile
     var body: some View {
+        Section("Đầu vào") {
+            Toggle("Bật microphone và điều khiển bằng giọng nói", isOn: $draft.microphoneEnabled)
+            Text(draft.microphoneEnabled
+                 ? "Từ gọi, luyện giọng, giọng đọc và nhận dạng được cấu hình ở các bước giọng nói."
+                 : "Tắt để dùng \(draft.assistantName) bằng chữ; các bước giọng nói, tải model và quyền micro được bỏ qua.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// How the agent answers: length, tone, standing instructions and memory.
+private struct StyleSections: View {
+    @Binding var draft: Profile
+    private static let instructionLimit = 2000
+
+    var body: some View {
+        Section("Cách trả lời") {
+            Picker("Độ dài", selection: $draft.replyLength) {
+                ForEach(Profile.ReplyLength.allCases) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented)
+            Picker("Giọng điệu", selection: $draft.tone) {
+                ForEach(Profile.Tone.allCases) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented)
+        }
+        Section {
+            TextEditor(text: $draft.customInstructions)
+                .font(.body)
+                .frame(minHeight: 72)
+                .accessibilityLabel("Hướng dẫn riêng cho \(draft.assistantName)")
+                .onChange(of: draft.customInstructions) { _, value in
+                    if value.count > Self.instructionLimit { draft.customInstructions = String(value.prefix(Self.instructionLimit)) }
+                }
+        } header: {
+            Text("Hướng dẫn riêng")
+        } footer: {
+            Text("Điều \(draft.assistantName) luôn cần biết, ví dụ: “Mình là dev iOS; đổi giá sang VND; trả lời có dấu.” Tối đa \(Self.instructionLimit) ký tự, còn \(Self.instructionLimit - draft.customInstructions.count).")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Trí nhớ") {
+            Toggle("Cho \(draft.assistantName) nhớ các cuộc trò chuyện", isOn: $draft.memoryEnabled)
+            Text("Lưu trong ~/.local/share/tibo/memory trên máy này. Bảo \(draft.assistantName) “quên …” để xoá.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Tool groups the agent may use and the folder its file tools work in.
+private struct ToolSections: View {
+    @Binding var draft: Profile
+
+    static func workspaceLabel(_ profile: Profile) -> String {
+        profile.workspace.isEmpty ? "Mặc định (~/.local/share/tibo/workspace)" : (profile.workspace as NSString).abbreviatingWithTildeInPath
+    }
+
+    static func disabledSummary(_ profile: Profile) -> String {
+        let off = [(profile.allowShell, "shell"), (profile.allowWeb, "web"), (profile.allowFileWrite, "ghi file"), (profile.allowMac, "ứng dụng Mac"), (profile.allowMCP, "MCP")]
+            .filter { !$0.0 }.map(\.1)
+        return off.isEmpty ? "Không" : off.joined(separator: ", ")
+    }
+
+    var body: some View {
+        Section {
+            Toggle("Chạy lệnh shell", isOn: $draft.allowShell)
+            Toggle("Tìm kiếm và đọc trang web", isOn: $draft.allowWeb)
+            Toggle("Ghi file trong thư mục làm việc", isOn: $draft.allowFileWrite)
+            Toggle("Lịch, Lời nhắc, Ghi chú, hẹn giờ, nháp thư", isOn: $draft.allowMac)
+            Toggle("Công cụ MCP (mcp.json)", isOn: $draft.allowMCP)
+        } header: {
+            Text("Công cụ được dùng")
+        } footer: {
+            Text("Đọc, liệt kê và tìm file trong thư mục làm việc luôn bật. Lệnh shell, ghi file, MCP và mọi thao tác thay đổi vẫn hỏi bạn trước mỗi lần.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
+            LabeledContent("Thư mục") {
+                Text(Self.workspaceLabel(draft)).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+            }
+            HStack {
+                Button("Chọn thư mục…") { chooseFolder() }
+                Button("Dùng mặc định") { draft.workspace = "" }.disabled(draft.workspace.isEmpty)
+            }
+            if draft.workspace == FileManager.default.homeDirectoryForCurrentUser.path {
+                Text("Cả thư mục home: \(draft.assistantName) đọc được mọi tài liệu của bạn mà không hỏi.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        } header: {
+            Text("Thư mục làm việc")
+        } footer: {
+            Text("File tools chỉ chạy trong thư mục này. ~/.ssh, ~/.aws, Keychains và file .env luôn bị chặn.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Chọn"
+        panel.message = "Thư mục \(draft.assistantName) được làm việc"
+        if panel.runModal() == .OK, let url = panel.url { draft.workspace = url.path }
+    }
+}
+
+/// Any OpenAI-compatible `/chat/completions` endpoint; presets fill the URL, the list and test call the endpoint itself.
+private struct AgentPageView: View {
+    @Binding var draft: Profile
+    let store: ProfileStore
+    @State private var keyInput = ""
+    @State private var keyStatus = ""
+    @State private var keyError = ""
+    @State private var models: [String] = []
+    @State private var probing = false
+    @State private var probeResult = ""
+    @State private var probeError = ""
+    @State private var trusted: [String] = []
+
+    private static let providers: [(name: String, url: String)] = [
+        ("OpenAI", "https://api.openai.com/v1"),
+        ("OpenRouter", "https://openrouter.ai/api/v1"),
+        ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai"),
+        ("Groq", "https://api.groq.com/openai/v1"),
+        ("opencode Go", "https://opencode.ai/zen/go/v1"),
+        ("Ollama (trên máy này)", "http://localhost:11434/v1"),
+        ("LM Studio (trên máy này)", "http://localhost:1234/v1"),
+    ]
+
+    private var endpoint: URL? { agentEndpoint(draft.agentBaseURL) }
+
+    /// The key a test call uses: one typed but not saved yet, then Keychain, then the environment variable.
+    private var probeKey: String? {
+        if !keyInput.isEmpty { return keyInput }
+        if let endpoint, let saved = TiboCredentials.load(baseURL: endpoint) { return saved }
+        return ProcessInfo.processInfo.environment[draft.agentAPIKeyEnv.trimmingCharacters(in: .whitespacesAndNewlines)]
+    }
+
+    var body: some View {
         Form {
-            Section("Chọn chương trình trả lời") {
-                ForEach(Profile.Agent.allCases, id: \.id) { agent in
-                    let path = AgentCLI.resolve(agent)
-                    let selected = draft.agent == agent
-                    Button {
-                        draft.agent = agent
-                    } label: {
-                        HStack {
-                            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                            VStack(alignment: .leading) {
-                                Text(agent.title)
-                                Text(path?.path ?? "chưa cài").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                        .contentShape(Rectangle())
+            Section {
+                Picker("Nhà cung cấp", selection: Binding(
+                    get: {
+                        let current = draft.agentBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "/")))
+                        return Self.providers.first { $0.url == current }?.url ?? ""
+                    },
+                    set: { if !$0.isEmpty { draft.agentBaseURL = $0 } })) {
+                    ForEach(Self.providers, id: \.url) { Text($0.name).tag($0.url) }
+                    Text("Tùy chỉnh").tag("")
+                }
+                TextField("Endpoint API", text: $draft.agentBaseURL, prompt: Text("Dán URL, ví dụ https://…/v1"))
+                    .textContentType(.URL)
+                    .accessibilityLabel("Endpoint API của Tibo Agent")
+            } header: {
+                Text("Nhà cung cấp")
+            } footer: {
+                Text("Bất kỳ endpoint tương thích OpenAI. Ollama và LM Studio chạy trên máy này, thường không cần key.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                SecureField("API key mới", text: $keyInput)
+                    .textContentType(.password)
+                    .accessibilityLabel("API key mới")
+                HStack {
+                    Button("Lưu key") { saveKey() }.disabled(endpoint == nil || keyInput.isEmpty)
+                    Button("Xoá key", role: .destructive) { deleteKey() }.disabled(endpoint == nil)
+                }
+                if !keyStatus.isEmpty {
+                    Text(keyStatus).font(.caption).foregroundStyle(.secondary)
+                }
+                if !keyError.isEmpty {
+                    Text(keyError).font(.caption).foregroundStyle(.red)
+                        .accessibilityLabel("Lỗi: \(keyError)")
+                }
+                TextField("Hoặc đọc từ biến môi trường", text: $draft.agentAPIKeyEnv, prompt: Text("TIBO_API_KEY"))
+                    .accessibilityLabel("Tên biến môi trường API key")
+            } header: {
+                Text("API key")
+            } footer: {
+                Text("Key lưu trong Chuỗi khóa theo từng endpoint, không nằm trong profile.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Model") {
+                HStack {
+                    TextField("Tên model", text: $draft.agentModel, prompt: Text("Ví dụ: gpt-4o-mini"))
+                        .accessibilityLabel("Tên model")
+                    Menu("Chọn") {
+                        ForEach(models, id: \.self) { model in Button(model) { draft.agentModel = model } }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(path == nil)
-                    .opacity(path == nil ? 0.5 : 1)
-                    .accessibilityLabel("\(agent.title), \(path == nil ? "chưa cài" : "đã cài")")
-                    .accessibilityValue(selected ? "Đã chọn" : "Chưa chọn")
-                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .fixedSize()
+                    .disabled(models.isEmpty)
+                    .help(models.isEmpty ? "Bấm Tải danh sách model trước" : "\(models.count) model")
+                    .accessibilityLabel("Chọn model từ danh sách")
+                }
+                HStack {
+                    Button("Tải danh sách model") { Task { await loadModels() } }
+                        .disabled(endpoint == nil || probing)
+                    Button("Kiểm tra kết nối") { Task { await testConnection() } }
+                        .disabled(endpoint == nil || draft.agentModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || probing)
+                    if probing { ProgressView().controlSize(.small).accessibilityLabel("Đang kiểm tra") }
+                }
+                if !probeResult.isEmpty {
+                    Label(probeResult, systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+                }
+                if !probeError.isEmpty {
+                    Label(probeError, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.red)
+                        .accessibilityLabel("Lỗi: \(probeError)")
                 }
             }
-            if draft.agent == .pi {
-                Section("Model của pi") {
-                    TextField("Model", text: $draft.agentModel, prompt: Text("opencode-go/deepseek-v4.1-flash"))
-                    Text("Để trống để dùng model mặc định của pi.").font(.caption).foregroundStyle(.secondary)
+            Section {
+                if trusted.isEmpty {
+                    Text("Chưa nhớ lệnh nào. Khi Tibo xin phép chạy lệnh, tick “Nhớ lệnh này” để lần sau không hỏi lại.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(trusted, id: \.self) { prefix in
+                        HStack {
+                            Text(prefix).font(.system(size: 11, design: .monospaced)).lineLimit(2).textSelection(.enabled)
+                            Spacer()
+                            Button("Quên") {
+                                trusted.removeAll { $0 == prefix }
+                                NotificationCenter.default.post(name: .tiboForgetTrusted, object: prefix)
+                            }
+                            .accessibilityLabel("Quên lệnh \(prefix)")
+                        }
+                    }
                 }
-            }
-        }.formStyle(.grouped)
-        // pi is the default brain; if it isn't installed here, don't leave an unusable choice selected.
-        .onAppear {
-            if AgentCLI.resolve(draft.agent) == nil, let installed = Profile.Agent.allCases.first(where: { AgentCLI.resolve($0) != nil }) {
-                draft.agent = installed
+            } header: {
+                Text("Lệnh đã nhớ")
+            } footer: {
+                Text("Lưu trong ~/.local/share/tibo/trusted.json. “Quên” thì lần sau Tibo hỏi lại.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .formStyle(.grouped)
+        .onAppear {
+            refreshKeyStatus()
+            reloadTrusted()
+            if !store.credentialMigrationError.isEmpty {
+                keyError = store.credentialMigrationError
+            }
+        }
+        .onChange(of: draft.agentBaseURL) { _, _ in
+            refreshKeyStatus()
+            models = []
+            probeResult = ""
+            probeError = ""
+        }
+    }
+
+    /// The agent owns trusted.json; Settings only reads it and asks the agent to drop entries.
+    private func reloadTrusted() {
+        let url = ProfileStore.dataDir.appendingPathComponent("trusted.json")
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { trusted = []; return }
+        trusted = (object["shell"] as? [String]) ?? []
+    }
+
+    private func loadModels() async {
+        guard let endpoint else { return }
+        probing = true; probeResult = ""; probeError = ""
+        defer { probing = false }
+        do {
+            models = try await ModelProbe.models(base: endpoint, key: probeKey)
+            probeResult = models.isEmpty ? "Endpoint không trả về model nào; nhập tên model bằng tay." : "Tìm thấy \(models.count) model. Bấm Chọn để chọn."
+            announceAccessibility(probeResult)
+        } catch {
+            probeError = ModelProbe.message(error)
+            announceAccessibility(probeError, priority: .high)
+        }
+    }
+
+    private func testConnection() async {
+        guard let endpoint else { return }
+        let model = draft.agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        probing = true; probeResult = ""; probeError = ""
+        defer { probing = false }
+        let started = Date()
+        do {
+            try await ModelProbe.ping(base: endpoint, model: model, key: probeKey)
+            probeResult = String(format: "Kết nối được: %@ trả lời sau %.1f giây.", model, Date().timeIntervalSince(started))
+            announceAccessibility(probeResult)
+        } catch {
+            probeError = ModelProbe.message(error)
+            announceAccessibility(probeError, priority: .high)
+        }
+    }
+
+    private func refreshKeyStatus() {
+        keyError = ""
+        guard let endpoint else { keyStatus = ""; return }
+        keyStatus = TiboCredentials.load(baseURL: endpoint) == nil ? "Chưa có key cho endpoint này." : "Đã có key trong Chuỗi khóa."
+    }
+
+    private func saveKey() {
+        guard let endpoint else { keyError = "Nhập endpoint hợp lệ trước khi lưu key."; return }
+        do {
+            try TiboCredentials.save(key: keyInput, baseURL: endpoint)
+            store.credentialsChanged()
+            keyInput = ""
+            keyStatus = "Đã lưu key trong Chuỗi khóa."
+            keyError = ""
+        } catch { keyError = error.localizedDescription }
+    }
+
+    private func deleteKey() {
+        guard let endpoint else { return }
+        do {
+            try TiboCredentials.delete(baseURL: endpoint)
+            store.credentialsChanged()
+            keyInput = ""
+            keyStatus = "Đã xóa key khỏi Chuỗi khóa."
+            keyError = ""
+        } catch { keyError = error.localizedDescription }
+    }
+}
+
+/// Direct calls to the configured endpoint from the setup UI; the runtime makes the real requests.
+private enum ModelProbe {
+    struct HTTPError: Error { let status: Int; let detail: String }
+
+    static func models(base: URL, key: String?) async throws -> [String] {
+        let data = try await send(base.appendingPathComponent("models"), key: key)
+        let rows = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [[String: Any]] ?? []
+        return rows.compactMap { $0["id"] as? String }.sorted()
+    }
+
+    /// One tiny non-streaming completion: proves endpoint, key and model name together.
+    static func ping(base: URL, model: String, key: String?) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["model": model, "stream": false, "messages": [["role": "user", "content": "Reply with OK."]]])
+        _ = try await send(base.appendingPathComponent("chat/completions"), key: key, body: body)
+    }
+
+    static func message(_ error: Error) -> String {
+        guard let error = error as? HTTPError else { return "Không kết nối được: \(error.localizedDescription)" }
+        let reason = switch error.status {
+        case 401, 403: "Key sai, thiếu key hoặc không có quyền"
+        case 404: "Không thấy endpoint hoặc model này"
+        case 429: "Bị giới hạn tốc độ hoặc hết hạn mức"
+        default: "Máy chủ trả lỗi"
+        }
+        return "\(reason) (HTTP \(error.status))" + (error.detail.isEmpty ? "." : ": \(error.detail)")
+    }
+
+    private static func send(_ url: URL, key: String?, body: Data? = nil) async throws -> Data {
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        if let key, !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+        if let body {
+            request.httpMethod = "POST"
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let detail = (json?["error"] as? [String: Any])?["message"] as? String ?? json?["error"] as? String ?? ""
+            throw HTTPError(status: status, detail: String(detail.prefix(160)))
+        }
+        return data
     }
 }
 
@@ -390,7 +807,7 @@ private struct TtsPageView: View {
 
     private func preview() {
         previewRunning = true
-        var env = AgentCLI.environment()
+        var env = RuntimeEnvironment.environment()
         env["TIBO_TTS_ENGINE"] = draft.ttsEngine.rawValue
         env["TIBO_TTS_VOICE"] = draft.ttsVoice
         let text = "Xin chào, mình là \(draft.assistantName)."
@@ -463,7 +880,7 @@ private struct SttPageView: View {
                                         .accessibilityValue("\(Int(downloader.progress * 100)) phần trăm")
                                 } else if entry.id == recommended.id {
                                     Button("Tải về") { download(entry) }
-                                        .buttonStyle(.borderedProminent)
+                                        .tiboProminent()
                                         .disabled(downloader.active != nil)
                                 } else {
                                     Button("Tải về") { download(entry) }
@@ -558,7 +975,7 @@ private enum TiboProcess {
     }
 }
 
-/// Voice training as Form sections, shown under the name and wake words on the "Tên gọi" page.
+/// Voice training as Form sections, shown under the wake words on the voice page.
 private struct TrainingSections: View {
     @ObservedObject private var store: ProfileStore
     @Binding var draft: Profile
@@ -603,7 +1020,7 @@ private struct TrainingSections: View {
             ForEach(Array(draft.vocabulary.enumerated()), id: \.element) { index, term in
                 HStack {
                     Text(term.word); Spacer(); Text(term.heard.joined(separator: ", ")).foregroundStyle(.secondary)
-                    Button { draft.vocabulary.remove(at: index) } label: { Image(systemName: "trash") }.buttonStyle(.borderless).accessibilityLabel("Xóa \(term.word)")
+                    Button { draft.vocabulary.remove(at: index) } label: { Image(systemName: "trash") }.buttonStyle(.borderless).accessibilityLabel("Xoá \(term.word)")
                 }
             }
             if !vocabularyTakes.isEmpty { Text("Đã ghi \(vocabularyTakes.count)/2 lần cho “\(vocabularyWord)”").foregroundStyle(.secondary) }
@@ -617,7 +1034,8 @@ private struct TrainingSections: View {
 
     private func recordButton(title: String, active: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) { Label(active ? "Dừng ghi" : title, systemImage: active ? "stop.circle.fill" : "record.circle").frame(maxWidth: .infinity) }
-            .buttonStyle(.borderedProminent).tint(active ? .red : .accentColor).accessibilityLabel(active ? "Dừng ghi âm" : title)
+            .buttonStyle(.borderedProminent).tint(active ? .red : TiboStyle.accent).foregroundStyle(active ? .white : TiboStyle.onAccent)
+            .accessibilityLabel(active ? "Dừng ghi âm" : title)
     }
 
     private func recordWake() {
@@ -656,7 +1074,7 @@ private struct TrainingSections: View {
             lock.lock(); if kind == 0 { backend = value } else { apple = value }; remaining -= 1; let done = remaining == 0; lock.unlock()
             if done { Task { @MainActor in store.trainingActive = false; completion(RecognitionPair(backend: backend, apple: apple)); try? FileManager.default.removeItem(at: url) } }
         }
-        DispatchQueue.global(qos: .userInitiated).async { finish(0, TiboProcess.run(arguments: ["--transcribe", url.path], environment: AgentCLI.environment())) }
+        DispatchQueue.global(qos: .userInitiated).async { finish(0, TiboProcess.run(arguments: ["--transcribe", url.path], environment: RuntimeEnvironment.environment())) }
         Self.runAppleSpeech(url: url, context: context) { finish(1, $0) }
     }
 
@@ -681,11 +1099,14 @@ private struct TrainingSections: View {
 private struct PermissionsPageView: View {
     @ObservedObject private var store: ProfileStore
     @State private var refresh = 0
-    init(store: ProfileStore) { _store = ObservedObject(wrappedValue: store) }
+    private let microphone: Bool
+    init(store: ProfileStore, microphone: Bool) { _store = ObservedObject(wrappedValue: store); self.microphone = microphone }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            PermissionRow(title: "Microphone", status: microphoneStatus) { AVCaptureDevice.requestAccess(for: .audio) { _ in Task { @MainActor in refresh += 1 } } }
-            PermissionRow(title: "Nhận dạng giọng nói", status: speechStatus) { SFSpeechRecognizer.requestAuthorization { _ in Task { @MainActor in refresh += 1 } } }
+            if microphone {
+                PermissionRow(title: "Microphone", status: microphoneStatus) { AVCaptureDevice.requestAccess(for: .audio) { _ in Task { @MainActor in refresh += 1 } } }
+                PermissionRow(title: "Nhận dạng giọng nói", status: speechStatus) { SFSpeechRecognizer.requestAuthorization { _ in Task { @MainActor in refresh += 1 } } }
+            }
             // Neither API has a completion callback; the rows refresh when the user comes back from System Settings.
             PermissionRow(title: "Ghi màn hình (đọc màn hình)", status: screenStatus) { CGRequestScreenCaptureAccess(); refresh += 1 }
             PermissionRow(title: "Trợ năng (điều khiển máy)", status: accessibilityStatus) {
@@ -745,54 +1166,130 @@ private struct DoctorView: View {
             if !output.isEmpty { Text(output).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
         }
     }
-    private func run() { running = true; output = ""; DispatchQueue.global(qos: .userInitiated).async { let result = TiboProcess.run(arguments: ["--doctor"], environment: AgentCLI.environment()); Task { @MainActor in output = result; running = false } } }
+    private func run() { running = true; output = ""; DispatchQueue.global(qos: .userInitiated).async { let result = TiboProcess.run(arguments: ["--doctor"], environment: RuntimeEnvironment.environment()); Task { @MainActor in output = result; running = false } } }
 }
 
-private struct ListenPageView: View {
+/// Wake words, voice training, listening mode and spoken replies; only shown with the microphone on.
+private struct VoiceSections: View {
     @Binding var draft: Profile
+    let store: ProfileStore
     var body: some View {
-        Form {
-            Section("Cách gọi \(draft.assistantName)") {
-                Picker("Cách gọi", selection: $draft.voiceMode) {
-                    ForEach(Profile.VoiceMode.allCases) { Text($0 == .wake ? "Gọi tên “\(draft.assistantName)”, luôn lắng nghe" : $0.title).tag($0) }
-                }.pickerStyle(.radioGroup).labelsHidden()
-                Text("Hai chế độ bấm mic dùng nút mic trên notch và không cần gọi tên.").font(.caption).foregroundStyle(.secondary)
+        Section {
+            ForEach(Array(draft.wakeWords.enumerated()), id: \.offset) { index, word in
+                HStack {
+                    TextField("Từ gọi", text: Binding(get: { draft.wakeWords.indices.contains(index) ? draft.wakeWords[index] : "" },
+                                                      set: { if draft.wakeWords.indices.contains(index) { draft.wakeWords[index] = $0 } }),
+                              prompt: Text("Ví dụ: Ti bô"))
+                        .labelsHidden()
+                    Button { draft.wakeWords.remove(at: index) } label: {
+                        Image(systemName: "minus.circle").frame(width: 28, height: 28).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Xoá từ gọi \(word)")
+                }
             }
-            Section("Trả lời bằng giọng") {
-                Toggle("Cho \(draft.assistantName) nói", isOn: $draft.speakReplies)
-                Text("Khi không đọc, câu trả lời hiện chữ trên notch.").font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Trí nhớ") {
-                Toggle("Cho \(draft.assistantName) nhớ các cuộc trò chuyện", isOn: $draft.memoryEnabled)
-                Text("Lưu trong ~/.local/share/tibo/memory trên máy này. Nói “quên hết” để xoá.").font(.caption).foregroundStyle(.secondary)
-            }
-            NotchSections(draft: $draft)
-        }.formStyle(.grouped)
+            Button("Thêm từ gọi") { draft.wakeWords.append("") }
+        } header: {
+            Text("Từ gọi thêm")
+        } footer: {
+            Text("Nói “\(draft.assistantName) ơi …” để gọi; các từ ở đây cũng đánh thức \(draft.assistantName).").font(.caption).foregroundStyle(.secondary)
+        }
+        TrainingSections(draft: $draft, store: store)
+        Section("Cách gọi \(draft.assistantName)") {
+            Picker("Cách gọi", selection: $draft.voiceMode) {
+                ForEach(Profile.VoiceMode.allCases) { Text($0 == .wake ? "Gọi tên “\(draft.assistantName)”, luôn lắng nghe" : $0.title).tag($0) }
+            }.pickerStyle(.radioGroup).labelsHidden()
+            Text("Hai chế độ bấm mic dùng nút mic trên notch và không cần gọi tên.").font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Trả lời bằng giọng") {
+            Toggle("Cho \(draft.assistantName) nói", isOn: $draft.speakReplies)
+            Text("Khi không đọc, câu trả lời hiện chữ trên notch.").font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
-/// Notch placement and hover tuning, shown on the "Nghe, nói và notch" page.
+/// Placement, global shortcut, shortcut chips and auto-collapse delay.
 private struct NotchSections: View {
     @Binding var draft: Profile
     var body: some View {
-        Group {
-            Section("Vị trí") {
-                Picker("Vị trí", selection: $draft.notchPosition) {
-                    ForEach(Profile.NotchPosition.allCases) { Text($0.title).tag($0) }
-                }.pickerStyle(.segmented).labelsHidden()
+        Section("Vị trí") {
+            Picker("Vị trí", selection: $draft.notchPosition) {
+                ForEach(Profile.NotchPosition.allCases) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented).labelsHidden()
+            LabeledContent(String(format: "Tự thu lại sau %.1f giây khi không dùng", draft.collapseDelay)) { Slider(value: $draft.collapseDelay, in: 0.3...5, step: 0.1) }
+        }
+        Section {
+            HotkeyRecorder(hotkey: $draft.hotkey)
+        } header: {
+            Text("Phím tắt")
+        } footer: {
+            Text("Mở hoặc thu notch từ bất kỳ ứng dụng nào. Cần ít nhất một phím ⌃, ⌥ hoặc ⌘; Esc để hủy.").font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
+            ForEach($draft.quickPrompts) { $item in
+                HStack {
+                    TextField("Nhãn", text: $item.title, prompt: Text("Lịch hôm nay"))
+                        .labelsHidden().frame(width: 140)
+                        .accessibilityLabel("Nhãn gợi ý")
+                    TextField("Câu gửi đi", text: $item.prompt, prompt: Text("Hôm nay mình có lịch gì?"))
+                        .labelsHidden()
+                        .accessibilityLabel("Câu gửi khi bấm gợi ý \(item.title)")
+                    Button { draft.quickPrompts.removeAll { $0.id == item.id } } label: {
+                        Image(systemName: "minus.circle").frame(width: 28, height: 28).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Xoá gợi ý \(item.title)")
+                }
             }
-            Section("Cách mở khi rê chuột") {
-                Picker("Cách mở", selection: $draft.notchOpen) {
-                    ForEach(Profile.NotchOpen.allCases) { Text($0.title).tag($0) }
-                }.pickerStyle(.radioGroup).labelsHidden()
-            }
-            Section("Tinh chỉnh") {
-                LabeledContent("Nới vùng rê chuột: \(Int(draft.hoverMargin)) pt") { Slider(value: $draft.hoverMargin, in: 0...80, step: 2) }
-                LabeledContent(String(format: "Tự thu lại sau %.1f giây", draft.collapseDelay)) { Slider(value: $draft.collapseDelay, in: 0.3...5, step: 0.1) }
-                Button("Hiện vùng rê chuột") { NotificationCenter.default.post(name: .tiboShowHoverZone, object: nil) }
-                Text("Vùng hiện theo cài đặt đã lưu, trong 3 giây, khi notch đang chạy.").font(.caption).foregroundStyle(.secondary)
+            Button("Thêm gợi ý") { draft.quickPrompts.append(.init(title: "", prompt: "")) }
+                .disabled(draft.quickPrompts.count >= Profile.maxQuickPrompts)
+        } header: {
+            Text("Gợi ý nhanh")
+        } footer: {
+            Text("Tối đa \(Profile.maxQuickPrompts) nút trên notch trống, cạnh Đọc màn hình và Đính kèm tệp. Bấm là gửi câu đó.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Click, then press the new combination. The local monitor only sees keys while this window is key.
+private struct HotkeyRecorder: View {
+    @Binding var hotkey: Profile.Hotkey
+    @State private var monitor: Any?
+    private static let keyNames: [Int: String] = [kVK_Space: "Space", kVK_Return: "↩"]
+
+    var body: some View {
+        LabeledContent("Mở notch") {
+            HStack {
+                Button(monitor == nil ? hotkey.label : "Nhấn tổ hợp phím…") { monitor == nil ? start() : stop() }
+                    .accessibilityLabel(monitor == nil ? "Phím tắt mở notch: \(hotkey.spoken). Bấm để đổi" : "Đang chờ tổ hợp phím mới")
+                Button("Mặc định") { hotkey = Profile.Hotkey() }
+                    .disabled(hotkey == Profile.Hotkey())
             }
         }
+        .onDisappear { stop() }
+    }
+
+    private func start() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if Int(event.keyCode) == kVK_Escape { stop(); return nil }
+            let flags = event.modifierFlags.intersection([.control, .option, .shift, .command])
+            guard !flags.subtracting(.shift).isEmpty else { NSSound.beep(); return nil }
+            var carbon: UInt32 = 0
+            if flags.contains(.control) { carbon |= UInt32(controlKey) }
+            if flags.contains(.option) { carbon |= UInt32(optionKey) }
+            if flags.contains(.shift) { carbon |= UInt32(shiftKey) }
+            if flags.contains(.command) { carbon |= UInt32(cmdKey) }
+            let name = Self.keyNames[Int(event.keyCode)] ?? event.charactersIgnoringModifiers?.uppercased() ?? "?"
+            hotkey = Profile.Hotkey(keyCode: UInt32(event.keyCode), modifiers: carbon, key: name)
+            announceAccessibility("Phím tắt mới: \(hotkey.spoken)")
+            stop()
+            return nil
+        }
+    }
+
+    private func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
     }
 }
 
@@ -803,15 +1300,24 @@ private struct TryItPageView: View {
     @Binding var woke: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Làm thử một lần để chắc \(draft.assistantName) chạy đúng trên máy bạn.")
-            check(hovered, "Đưa chuột lên notch ở đỉnh màn hình")
-            check(woke, draft.voiceMode == .wake ? "Nói “\(draft.assistantName)” kèm một câu, ví dụ “\(draft.assistantName) ơi, mấy giờ rồi”" : "Bấm nút mic trên notch rồi nói một câu")
-            BuddyFace(mood: woke ? .happy : hovered ? .surprised : .idle, level: 0.5)
+            Text(draft.microphoneEnabled
+                 ? "Làm thử một lần để chắc Tibo Agent và notch chạy đúng trên máy bạn."
+                 : "Mở notch và gửi một tin nhắn chữ để thử Tibo Agent.")
+            check(hovered, "Bấm vào notch ở đỉnh màn hình, hoặc nhấn \(draft.hotkey.label)")
+            if draft.microphoneEnabled {
+                check(woke, draft.voiceMode == .wake ? "Nói “\(draft.assistantName)” kèm một câu" : "Bấm nút mic trên notch rồi nói một câu")
+            } else {
+                Text("Khi notch mở, nhập câu hỏi vào ô văn bản rồi gửi. Bạn có thể bật microphone sau trong Cài đặt.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            BuddyFace(mood: woke ? .happy : hovered ? .surprised : .idle, hearing: false)
                 .frame(width: 208, height: 120)
                 .background(.black).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .frame(maxWidth: .infinity)
                 .accessibilityHidden(true)
-            if hovered && !woke { Text("Phần giọng nói có thể bỏ qua nếu bạn đang ở chỗ ồn.").font(.caption).foregroundStyle(.secondary) }
+            if draft.microphoneEnabled && hovered && !woke {
+                Text("Phần giọng nói có thể bỏ qua nếu bạn đang ở chỗ ồn.").font(.caption).foregroundStyle(.secondary)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tiboNotchOpened)) { _ in hovered = true }
         .onReceive(NotificationCenter.default.publisher(for: .tiboWakeHeard)) { _ in woke = true }
@@ -941,50 +1447,50 @@ private struct PermissionRow: View {
 
 private struct SettingsRootView: View {
     @ObservedObject private var store: ProfileStore
-    @State private var selection: OnboardingPage? = .profile
+    @State private var selection: OnboardingPage? = .persona
     @State private var draft: Profile
-    @AppStorage("projectRoot") private var projectRoot = FileManager.default.homeDirectoryForCurrentUser.path
-    @AppStorage("typesafeApiKey") private var typesafeApiKey = ""
+    @State private var saveError = ""
 
     init(store: ProfileStore) { _store = ObservedObject(wrappedValue: store); _draft = State(initialValue: store.profile) }
 
     var body: some View {
         HStack(spacing: 0) {
             List(selection: $selection) {
-                ForEach([OnboardingPage.profile, .assistant, .agent, .tts, .stt, .listen], id: \.self) { page in
+                ForEach(OnboardingPage.settings, id: \.self) { page in
                     Label(page.title, systemImage: page.symbol).tag(Optional(page))
                 }
-                Label("Nâng cao", systemImage: "gearshape.2").tag(Optional<OnboardingPage>.none)
             }
             .listStyle(.sidebar)
-            .frame(width: 190)
+            .frame(width: 200)
             Divider()
-            ScrollView { detail.padding(28) }
+            VStack(spacing: 0) {
+                ScrollView { SetupPageView(page: selection ?? .persona, draft: $draft, store: store, onboarding: false).padding(28) }
+                    .id(selection)
+                Divider()
+                VStack(alignment: .trailing, spacing: 6) {
+                    if !saveError.isEmpty {
+                        Text(saveError).font(.caption).foregroundStyle(.red).accessibilityLabel("Lỗi: \(saveError)")
+                    }
+                    HStack { Spacer(); Button("Lưu") { saveSettings() }.tiboProminent() }
+                }
+                .padding(.horizontal, 22).padding(.vertical, 14)
+            }
         }
-        .safeAreaInset(edge: .bottom) {
-            HStack { Spacer(); Button("Lưu") { draft.onboarded = true; store.save(draft); TiboWindows.closeSettings() }.buttonStyle(.borderedProminent) }.padding(.horizontal, 22).padding(.vertical, 14)
-        }
-        .frame(minWidth: 640, minHeight: 520)
+        .frame(minWidth: 720, minHeight: 560)
     }
 
-    @ViewBuilder private var detail: some View {
-        switch selection {
-        case .some(.profile): ProfilePageView(draft: $draft)
-        case .some(.assistant): AssistantPageView(draft: $draft, store: store)
-        case .some(.agent): AgentPageView(draft: $draft)
-        case .some(.tts): TtsPageView(draft: $draft)
-        case .some(.stt): SttPageView(draft: $draft)
-        case .some(.listen): ListenPageView(draft: $draft)
-        case nil: advanced
-        default: EmptyView()
+    private func saveSettings() {
+        if let problem = validate(&draft) {
+            saveError = problem
+            return
         }
-    }
-
-    private var advanced: some View {
-        Form {
-            Section("Nâng cao") { TextField("Project root", text: $projectRoot); SecureField("TypeSafe API key", text: $typesafeApiKey) }
-            Section("Chẩn đoán") { DoctorView() }
-        }.formStyle(.grouped)
+        draft.onboarded = true
+        store.save(draft)
+        if store.persistenceError.isEmpty {
+            TiboWindows.closeSettings()
+        } else {
+            saveError = "Không thể lưu profile: \(store.persistenceError)"
+        }
     }
 }
 
